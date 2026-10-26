@@ -1,0 +1,17 @@
+//! unclosed_braces.stasis:9:5: error: expected `,` or `}`, found `object`
+//! unclosed_braces.stasis:12:1: error: expected a method, or `}` to end object `entity`, found `group`
+//! unclosed_braces.stasis:12:1: error: expected `}` to end group `world`, found `group`
+//! unclosed_braces.stasis:18:1: error: expected an entry point, `uses`, or `}` to end script `npc`, found the end of the file
+interface test:unclosed@1.0.0;
+
+group world {
+    record vec2 { x: f32, y: f32
+    object entity {
+        fn name() -> string;
+
+group combat {
+    fn attack(target: u32) -> bool;
+}
+
+script npc {
+    fn tick();

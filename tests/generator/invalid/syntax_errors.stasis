@@ -1,0 +1,24 @@
+interface test:syntax@1.0.0;
+
+group world {
+    record vec2 { x f32, y: f32, z: f32 w: f32 }
+    object entity {
+        fn name() -> ;
+        =
+        fn level(by s8) -> u8;
+    }
+    fn find(name: string, 42) -> entity;
+    fn light(at: vec2) -> f32 extra;
+    fn after() -> unknown;
+}
+
+script npc { fn tick(); }
+
+//! syntax_errors.stasis:4:21: error: expected `:`, found `f32`
+//! syntax_errors.stasis:4:41: error: expected `,` or `}`, found `w`
+//! syntax_errors.stasis:6:22: error: expected a type, found `;`
+//! syntax_errors.stasis:7:9: error: unexpected character `=`
+//! syntax_errors.stasis:8:21: error: expected `:`, found `s8`
+//! syntax_errors.stasis:10:27: error: expected a name, found `42`
+//! syntax_errors.stasis:11:31: error: expected `;`, found `extra`
+//! syntax_errors.stasis:12:19: error: unknown type `unknown`

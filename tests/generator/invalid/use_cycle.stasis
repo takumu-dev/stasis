@@ -1,0 +1,28 @@
+interface test:use_cycle@1.0.0;
+
+group world {
+    use combat::{hit};
+    record vec2 { x: f32, y: f32 }
+}
+
+group combat {
+    use trade::{offer};
+    record hit { damage: u32 }
+}
+
+group trade {
+    use world::{vec2};
+    record offer { price: u32 }
+}
+
+group alone {
+    use alone::{thing};
+    record thing { x: u8 }
+}
+
+script npc { fn tick(); }
+
+//! use_cycle.stasis:4:9: error: groups can't use each other in a cycle, but `world` uses `combat`, which uses `trade`, which uses `world`
+//! use_cycle.stasis:9:9: note: `combat` uses `trade` here
+//! use_cycle.stasis:14:9: note: `trade` uses `world` here
+//! use_cycle.stasis:19:9: error: group `alone` can't use itself

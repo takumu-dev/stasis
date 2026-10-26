@@ -1,0 +1,12 @@
+/// Lines that end in CRLF.
+interface test:crlf@1.0.0;
+
+group world {
+    /// A doc comment.
+    fn find(name: string) -> u8;
+}
+
+script npc {
+    uses world;
+    fn tick();
+}

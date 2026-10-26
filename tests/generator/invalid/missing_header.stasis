@@ -1,0 +1,4 @@
+group world {}
+script npc { fn tick(); }
+
+//! missing_header.stasis:1:1: error: expected the interface's header, `interface <namespace>:<name>@<version>;`, found `group`

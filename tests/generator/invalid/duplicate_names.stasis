@@ -1,0 +1,42 @@
+interface test:duplicates@1.0.0;
+
+group world {
+    record vec2 { x: f32, x: f32 }
+    object entity {
+        fn name() -> string;
+        fn name() -> string;
+    }
+    fn find(name: string, name: u8) -> entity;
+    fn vec2();
+}
+
+group combat {
+    use world::{entity, entity};
+}
+
+group world {}
+
+script combat {
+    uses world, world;
+    fn tick();
+    fn tick(frame: u64);
+}
+
+//! duplicate_names.stasis:4:27: error: duplicate name `x` in record `vec2`
+//! duplicate_names.stasis:4:19: note: the first `x` is here
+//! duplicate_names.stasis:7:12: error: duplicate name `name` in object `entity`
+//! duplicate_names.stasis:6:12: note: the first `name` is here
+//! duplicate_names.stasis:9:27: error: duplicate name `name` in the parameters of `find`
+//! duplicate_names.stasis:9:13: note: the first `name` is here
+//! duplicate_names.stasis:10:8: error: duplicate name `vec2` in group `world`
+//! duplicate_names.stasis:4:12: note: the first `vec2` is here
+//! duplicate_names.stasis:14:25: error: duplicate name `entity` in group `combat`
+//! duplicate_names.stasis:14:17: note: the first `entity` is here
+//! duplicate_names.stasis:17:7: error: duplicate name `world` in the interface
+//! duplicate_names.stasis:3:7: note: the first `world` is here
+//! duplicate_names.stasis:19:8: error: duplicate name `combat` in the interface
+//! duplicate_names.stasis:13:7: note: the first `combat` is here
+//! duplicate_names.stasis:20:17: error: duplicate name `world` in the `uses` of `combat`
+//! duplicate_names.stasis:20:10: note: the first `world` is here
+//! duplicate_names.stasis:22:8: error: duplicate name `tick` in script `combat`
+//! duplicate_names.stasis:21:8: note: the first `tick` is here

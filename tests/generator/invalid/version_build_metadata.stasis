@@ -1,0 +1,4 @@
+interface test:version@1.0.0+build.5;
+script npc { fn tick(); }
+
+//! version_build_metadata.stasis:1:29: error: an interface's version can't have build metadata

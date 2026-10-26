@@ -1,0 +1,27 @@
+interface Test:bad_Name@1.0.0;
+
+group World {
+    record vec_2 { X: f32, y_: f32 }
+    object _entity {
+        fn name__of() -> string;
+    }
+    fn find(Name: string, a_1b: u8);
+}
+
+script Npc {
+    uses World;
+    fn Tick();
+}
+
+//! names.stasis:1:11: error: `Test` isn't a valid name: names are lowercase
+//! names.stasis:1:16: error: `bad_Name` isn't a valid name: names are lowercase
+//! names.stasis:3:7: error: `World` isn't a valid name: names are lowercase
+//! names.stasis:4:12: error: `vec_2` isn't a valid name: each word of a name starts with a letter
+//! names.stasis:4:20: error: `X` isn't a valid name: names are lowercase
+//! names.stasis:4:28: error: `y_` isn't a valid name: names don't end in `_`
+//! names.stasis:5:12: error: `_entity` isn't a valid name: names start with a letter
+//! names.stasis:6:12: error: `name__of` isn't a valid name: the words of a name are separated by a single `_`
+//! names.stasis:8:13: error: `Name` isn't a valid name: names are lowercase
+//! names.stasis:8:27: error: `a_1b` isn't a valid name: each word of a name starts with a letter
+//! names.stasis:11:8: error: `Npc` isn't a valid name: names are lowercase
+//! names.stasis:13:8: error: `Tick` isn't a valid name: names are lowercase

@@ -1,0 +1,65 @@
+// Every form the format allows, in one interface. This is a plain comment, and so is the line
+//// with four slashes before the header.
+
+/// The interface's doc comment,
+// interrupted by a plain comment,
+/// which goes on with non-ASCII: café, 日本語, ✓.
+interface test:syntax_check@0.12.4294967295;
+
+/// The kind of script comes first, and its `uses` name groups declared after it.
+script runner {
+    uses
+        earlier,
+        later,
+        shared, // a trailing comma
+    ;
+
+    /// No parameters, and no result.
+    fn start();
+    optional fn finish(code: s32, reason: string,) -> bool;
+    /// `point` is declared by `shared`, which `later` uses: both mean the same record.
+    optional fn report() -> point;
+    fn handle(target: widget, self: u8, instance: u8, result_code: u8) -> widget;
+}
+
+group earlier {
+    //// Not a doc comment, so it can come before a `use`.
+    use later::{widget,};
+    use later::{frame};
+
+    fn spawn(at: frame) -> widget;
+}
+
+/// Declarations come in any order: `frame` is used before it's declared.
+group later {
+    use shared::{point};
+
+    record nested { inner: frame, flag: bool }
+
+    /// A record.
+    record frame {
+        /// A field.
+        origin: point,
+        size: point,
+    }
+
+    object widget {
+        /// A method.
+        fn move_to(to: point) -> point;
+        fn sibling() -> gadget;
+    }
+
+    object gadget {
+        fn sibling() -> widget;
+    }
+
+    fn every(a: u8, b: u16, c: u32, d: u64, e: s8, f: s16, g: s32, h: s64, i: f32, j: f64, k: bool, l: string);
+    fn deep(v2: nested) -> nested;
+}
+
+group shared {
+    record point { x: f64, y: f64, }
+    object nothing_to_call {}
+}
+
+group empty {}

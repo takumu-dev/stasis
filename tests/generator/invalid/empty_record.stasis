@@ -1,0 +1,11 @@
+interface test:empty_record@1.0.0;
+
+group world {
+    record nothing {}
+    record also_nothing { }
+}
+
+script npc {}
+
+//! empty_record.stasis:4:12: error: record `nothing` has no fields, but a record needs at least one
+//! empty_record.stasis:5:12: error: record `also_nothing` has no fields, but a record needs at least one

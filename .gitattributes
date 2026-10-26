@@ -1,3 +1,6 @@
 * text=auto eol=lf
 # NIST's test vectors, kept byte for byte as NIST publishes them.
 tests/nist/*.rsp -text
+# Interfaces whose lines end in CRLF, as an editor on Windows may write them.
+tests/generator/valid/crlf.stasis -text
+tests/generator/invalid/crlf_columns.stasis -text

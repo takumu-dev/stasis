@@ -1,0 +1,4 @@
+interface stasis:dungeon@1.0.0;
+script npc { fn tick(); }
+
+//! stasis_namespace.stasis:1:11: error: the namespace `stasis` is reserved for Stasis's own interfaces

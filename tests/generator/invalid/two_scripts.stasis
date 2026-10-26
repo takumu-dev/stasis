@@ -1,0 +1,10 @@
+interface test:two_scripts@1.0.0;
+
+script npc { fn tick(); }
+script boss { fn tick(); }
+script pet {}
+
+//! two_scripts.stasis:4:8: error: another kind of script, but an interface has exactly one
+//! two_scripts.stasis:3:8: note: the first is `npc`, here
+//! two_scripts.stasis:5:8: error: another kind of script, but an interface has exactly one
+//! two_scripts.stasis:3:8: note: the first is `npc`, here

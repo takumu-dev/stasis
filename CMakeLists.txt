@@ -106,6 +106,13 @@ target_include_directories(stasis_sha256 PUBLIC "${PROJECT_SOURCE_DIR}/src")
 set_target_properties(stasis_sha256 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 stasis_target_conventions(stasis_sha256)
 
+# The encoding of signatures, whose hashes name a script's imports and entry points. It's compiled
+# once, like SHA-256, for everything of Stasis's that names them.
+add_library(stasis_signature OBJECT src/signature.c src/signature.h)
+target_link_libraries(stasis_signature PUBLIC stasis_sha256)
+set_target_properties(stasis_signature PROPERTIES POSITION_INDEPENDENT_CODE ON)
+stasis_target_conventions(stasis_signature)
+
 # WAMR, compiled into the library, with its printing discarded.
 include(StasisWamr)
 stasis_add_wamr(stasis_wamr VPRINTF stasis_wamr_vprintf)
@@ -150,6 +157,16 @@ if(STASIS_INSTALL)
     include(GNUInstallDirs)
     install(TARGETS stasis FILE_SET HEADERS)
     install(FILES THIRD_PARTY_NOTICES.md TYPE DOC)
+endif()
+
+# The generator, stasis-gen, which reads interface files. A build that isn't cross-compiling defines
+# it, but a host's build makes it only when something needs it.
+if(NOT CMAKE_CROSSCOMPILING)
+    if(PROJECT_IS_TOP_LEVEL)
+        add_subdirectory(generator)
+    else()
+        add_subdirectory(generator EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 if(STASIS_BUILD_TESTS)

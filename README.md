@@ -4,8 +4,8 @@ Stasis is a game scripting library. It runs scripts compiled to WebAssembly in a
 game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, its C API declares the status codes its
-functions will return, and the library holds the WebAssembly runtime its scripts will run on, but
-nothing runs scripts yet.
+functions will return, the library holds the WebAssembly runtime its scripts will run on, and its
+generator checks interface files, but nothing runs scripts yet.
 
 ## Requirements
 
@@ -173,3 +173,71 @@ These options default to on when Stasis is the top-level project and off when it
 
 `STASIS_WAMR_INTERPRETER` chooses the interpreter scripts run on, `fast` or `classic`, in a host's
 build as in Stasis's own.
+
+## Interface files and the generator
+
+A host declares what its scripts may call and what they provide in one interface file, with the
+extension `.stasis`:
+
+```rust
+/// The dungeon's scripting interface.
+interface acme:dungeon@1.2.0;
+
+group world {
+    record vec2 { x: f32, y: f32 }
+
+    /// Anything that lives in the dungeon.
+    object entity {
+        fn name() -> string;
+        fn position() -> vec2;
+    }
+
+    fn find(name: string) -> entity;
+}
+
+group combat {
+    use world::{entity};
+
+    fn attack(target: entity, damage: u32) -> bool;
+}
+
+script npc {
+    uses world, combat;
+
+    fn tick(frame: u64);
+    optional fn on_hit(by: entity, damage: u32);
+}
+```
+
+- The header names the interface and its version, `<namespace>:<name>@<major>.<minor>.<patch>`,
+  with no pre-release suffix or build metadata. The namespace `stasis` is reserved.
+- A group declares host functions, records, and kinds of host object, which are `object`s with
+  methods. Its declarations may come in any order, and `use` brings in another group's records and
+  objects, as long as no groups use each other in a cycle. A record holds at least one field, and
+  never itself.
+- The one kind of script, `script`, names the groups its scripts may call in its one `uses`, and
+  declares the entry points they provide, which are required unless they're `optional`.
+- The types are `u8` to `u64`, `s8` to `s64`, `f32`, `f64`, `bool`, `string`, records, and
+  objects, whose handles are written as the object's name.
+- Names are lowercase ASCII snake_case, and each of their words starts with a letter. A name is
+  unique within its scope, and can't be a keyword, a built-in type, or one of the words reserved
+  for later versions of the format: `list`, `tuple`, `enum`, `flags`, `variant`, `option`,
+  `result` and `char`.
+- `///` starts a doc comment, which documents the declaration after it, and `//` any other comment.
+  The file is UTF-8, with non-ASCII only in comments. Lists may end in a trailing comma.
+
+`stasis-gen`, Stasis's generator, reads an interface file:
+
+| Command | What it does |
+|---|---|
+| `stasis-gen check <file>` | Checks the interface, and writes nothing |
+| `stasis-gen signatures <file>` | Prints each host function's, method's and entry point's name, the encoding of its signature, and that encoding's hash, which names it in a script |
+
+It reports every error in the file in one run, on stderr, as `<file>:<line>:<column>: error:
+<message>`, where columns count bytes. A `note:` line after an error points at another place in
+the file that bears on it, such as the first of two declarations with the same name. There are no
+warnings. It exits with 0 when the interface has no errors, 1 when it has, and 2 when it can't run,
+as for a bad command line or a file it can't read.
+
+A build of Stasis that isn't cross-compiling defines the generator as the target
+`stasis::generator`. In a host's build, it's built only when something needs it.

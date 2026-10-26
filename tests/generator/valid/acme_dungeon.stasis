@@ -1,0 +1,27 @@
+/// The dungeon's scripting interface.
+interface acme:dungeon@1.2.0;
+
+group world {
+    record vec2 { x: f32, y: f32 }
+
+    /// Anything that lives in the dungeon.
+    object entity {
+        fn name() -> string;
+        fn position() -> vec2;
+    }
+
+    fn find(name: string) -> entity;
+}
+
+group combat {
+    use world::{entity};
+
+    fn attack(target: entity, damage: u32) -> bool;
+}
+
+script npc {
+    uses world, combat;
+
+    fn tick(frame: u64);
+    optional fn on_hit(by: entity, damage: u32);
+}

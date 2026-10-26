@@ -14,6 +14,8 @@ include(StasisWasiSdk)
 stasis_wasi_sdk_program(STASIS_CLANG_FORMAT clang-format)
 if(STASIS_CLANG_FORMAT)
     file(GLOB_RECURSE sources CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/generator/*.c"
+        "${PROJECT_SOURCE_DIR}/generator/*.h"
         "${PROJECT_SOURCE_DIR}/include/*.h"
         "${PROJECT_SOURCE_DIR}/src/*.c"
         "${PROJECT_SOURCE_DIR}/src/*.h"

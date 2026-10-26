@@ -1,0 +1,18 @@
+interface test:non_ascii@1.0.0;
+
+// Non-ASCII is fine in a comment: café.
+group wörld {
+    /// And in a doc comment: ✓.
+    fn find(name: string) → u8;
+}
+
+script npc {
+    uses wörld;
+    fn tick(at: «u8»);
+}
+
+//! non_ascii.stasis:4:8: error: non-ASCII characters are only allowed in comments
+//! non_ascii.stasis:6:27: error: non-ASCII characters are only allowed in comments
+//! non_ascii.stasis:6:31: error: expected `;`, found `u8`
+//! non_ascii.stasis:10:11: error: non-ASCII characters are only allowed in comments
+//! non_ascii.stasis:11:17: error: non-ASCII characters are only allowed in comments

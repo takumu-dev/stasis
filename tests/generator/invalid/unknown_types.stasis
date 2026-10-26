@@ -1,0 +1,33 @@
+interface test:types@1.0.0;
+
+group world {
+    record vec2 { x: f32, y: f32 }
+    object entity {}
+    fn find(name: str) -> entity;
+    fn light(at: find) -> f32;
+}
+
+group combat {
+    fn attack(target: entity, at: vec3);
+}
+
+group ui {
+    record vec2 { x: s32, y: s32 }
+}
+
+script npc {
+    uses world, ui;
+    fn tick(at: vec2, by: entity, target: hit);
+    fn find() -> find;
+}
+
+//! unknown_types.stasis:6:19: error: unknown type `str`
+//! unknown_types.stasis:7:18: error: `find` is a host function, not a type
+//! unknown_types.stasis:11:23: error: unknown type `entity`
+//! unknown_types.stasis:5:12: note: `entity` is declared in group `world`
+//! unknown_types.stasis:11:35: error: unknown type `vec3`
+//! unknown_types.stasis:20:17: error: `vec2` is ambiguous: the groups that `npc` uses have more than one
+//! unknown_types.stasis:4:12: note: group `world` declares one here
+//! unknown_types.stasis:15:12: note: group `ui` declares one here
+//! unknown_types.stasis:20:43: error: unknown type `hit`
+//! unknown_types.stasis:21:18: error: `find` is a host function, not a type

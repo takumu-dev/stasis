@@ -1,0 +1,26 @@
+interface test:use_errors@1.0.0;
+
+group world {
+    record vec2 { x: f32, y: f32 }
+    fn find(name: string) -> u8;
+}
+
+group combat {
+    use world::{vec2, find, vec3};
+    use npc::{tick};
+    use trade::{offer};
+    record hit { at: vec2 }
+}
+
+group bank {
+    use combat::{hit, vec2};
+}
+
+script npc { fn tick(); }
+
+//! use_errors.stasis:9:23: error: `find` is a host function, and `use` brings in only records and objects
+//! use_errors.stasis:9:29: error: group `world` declares no record or object `vec3`
+//! use_errors.stasis:10:9: error: `npc` is a kind of script, not a group
+//! use_errors.stasis:11:9: error: there's no group `trade`
+//! use_errors.stasis:16:23: error: group `combat` doesn't declare `vec2`, and `use` brings in only what a group declares itself
+//! use_errors.stasis:9:17: note: `combat` brings it in from group `world` here

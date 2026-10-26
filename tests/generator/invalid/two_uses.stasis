@@ -1,0 +1,13 @@
+interface test:two_uses@1.0.0;
+
+group world {}
+group combat {}
+
+script npc {
+    uses world;
+    fn tick();
+    uses combat;
+}
+
+//! two_uses.stasis:9:5: error: another `uses`, but a kind of script has only one
+//! two_uses.stasis:7:5: note: the first is here

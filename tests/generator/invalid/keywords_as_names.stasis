@@ -1,0 +1,18 @@
+interface test:keywords@1.0.0;
+
+group use {
+    record object { fn: u8 }
+    fn record(group: u8) -> u8;
+}
+
+script optional {
+    fn interface();
+}
+
+//! keywords_as_names.stasis:3:7: error: `use` is a keyword, and can't be a name
+//! keywords_as_names.stasis:4:12: error: `object` is a keyword, and can't be a name
+//! keywords_as_names.stasis:4:21: error: `fn` is a keyword, and can't be a name
+//! keywords_as_names.stasis:5:8: error: `record` is a keyword, and can't be a name
+//! keywords_as_names.stasis:5:15: error: `group` is a keyword, and can't be a name
+//! keywords_as_names.stasis:8:8: error: `optional` is a keyword, and can't be a name
+//! keywords_as_names.stasis:9:8: error: `interface` is a keyword, and can't be a name

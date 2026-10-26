@@ -1,0 +1,4 @@
+interface test:version@1.0.0-rc.1;
+script npc { fn tick(); }
+
+//! version_pre_release.stasis:1:29: error: an interface's version can't have a pre-release suffix

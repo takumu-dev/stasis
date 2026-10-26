@@ -1,0 +1,29 @@
+//! doc_comments.stasis:10:5: error: this doc comment documents nothing
+//! doc_comments.stasis:13:9: error: this doc comment documents nothing
+//! doc_comments.stasis:16:5: error: this doc comment documents nothing
+//! doc_comments.stasis:24:5: error: this doc comment documents nothing
+//! doc_comments.stasis:29:1: error: this doc comment documents nothing
+/// Documents the interface.
+interface test:docs@1.0.0;
+
+group world {
+    /// Documents nothing: `use` takes no doc comment.
+    use combat::{hit};
+    fn find(
+        /// Documents nothing: parameters take no doc comments.
+        name: string,
+    ) -> u8;
+    /// Documents nothing, before the end of the group.
+}
+
+group combat {
+    record hit { damage: u32 }
+}
+
+script npc {
+    /// Documents nothing: `uses` takes no doc comment.
+    uses world;
+    fn tick();
+}
+
+/// Documents nothing, at the end of the file.

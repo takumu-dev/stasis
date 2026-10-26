@@ -1,0 +1,23 @@
+interface test:semicolons@1.0.0
+
+group world {
+    fn find(name: string) -> u8
+    fn light() -> f32;
+    use combat::{hit}
+    record vec2 { x: f32, y: f32 }
+}
+
+group combat {
+    record hit { damage: u32 }
+}
+
+script npc {
+    uses world
+    fn tick()
+}
+
+//! missing_semicolons.stasis:3:1: error: expected `;`, found `group`
+//! missing_semicolons.stasis:5:5: error: expected `;`, found `fn`
+//! missing_semicolons.stasis:7:5: error: expected `;`, found `record`
+//! missing_semicolons.stasis:16:5: error: expected `,` or `;`, found `fn`
+//! missing_semicolons.stasis:17:1: error: expected `;`, found `}`
