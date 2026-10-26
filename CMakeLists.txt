@@ -33,6 +33,28 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(StasisConventions)
 
+# The licence check, of the code vendored under third_party/: each dependency's licence against the
+# allowlist, each directory against the manifest, and THIRD_PARTY_NOTICES.md against what ships. It
+# runs whenever Stasis is the top-level project, and never in a host's build.
+if(PROJECT_IS_TOP_LEVEL)
+    set(stasis_license_check "${PROJECT_SOURCE_DIR}/cmake/check_licenses.cmake")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            "-DNOTICES=${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+            -P "${stasis_license_check}"
+        RESULT_VARIABLE stasis_license_result
+    )
+    if(NOT stasis_license_result EQUAL 0)
+        message(FATAL_ERROR "The licence check above failed.")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${stasis_license_check}"
+        "${PROJECT_SOURCE_DIR}/third_party/dependencies.json"
+        "${PROJECT_SOURCE_DIR}/third_party/licenses.json"
+        "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+    )
+endif()
+
 # A host that adds Stasis as a subproject gets the library alone.
 option(STASIS_BUILD_TESTS "Build Stasis's tests." ${PROJECT_IS_TOP_LEVEL})
 option(STASIS_BUILD_TOOLS "Add the targets that format and check Stasis's sources."
@@ -95,9 +117,11 @@ if(stasis_type STREQUAL "SHARED_LIBRARY")
 endif()
 stasis_target_conventions(stasis)
 
+# The notices of the third-party code compiled into the library go with it.
 if(STASIS_INSTALL)
     include(GNUInstallDirs)
     install(TARGETS stasis FILE_SET HEADERS)
+    install(FILES THIRD_PARTY_NOTICES.md TYPE DOC)
 endif()
 
 if(STASIS_BUILD_TESTS)

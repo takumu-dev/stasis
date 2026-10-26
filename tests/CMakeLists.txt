@@ -2,6 +2,7 @@
 #
 #   harness.*  the harness's own checks
 #   headers.*  what the public headers include
+#   licenses.* the licence check, on dependencies of its own
 #   scripts.*  scripts built from source, as the tests build them
 #   sha256.*   SHA-256 against NIST's test vectors
 #   status.*   the status codes, through the C API
@@ -17,6 +18,7 @@ include(StasisTesting)
 include(StasisScripts)
 
 add_subdirectory(harness)
+add_subdirectory(licenses)
 add_subdirectory(scripts)
 
 # SHA-256 is the one part of the library tested directly, since no function of the API can hand it

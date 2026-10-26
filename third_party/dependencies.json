@@ -1,0 +1,13 @@
+{
+  "dependencies": [
+    {
+      "name": "wamr",
+      "version": "2.4.5",
+      "url": "https://github.com/bytecodealliance/wasm-micro-runtime",
+      "commit": "25bd7eb63e828e4bd242cc9b38d260b4b31c6605",
+      "license": "Apache-2.0 WITH LLVM-exception AND Apache-2.0",
+      "ships": true,
+      "notices": ["LICENSE", "samples/wasm-c-api/src/LICENSE"]
+    }
+  ]
+}
