@@ -26,6 +26,15 @@ target_compile_definitions(stasis_test_sha256 PRIVATE
 stasis_add_test(status status_test.c)
 target_link_libraries(stasis_test_status PRIVATE stasis::stasis)
 
+# stasis_status stays 32 bits even where a host's compiler makes each enum as small as its values
+# allow, which the build checks by compiling status_size.c that way.
+if(NOT MSVC)
+    add_library(stasis_status_size OBJECT status_size.c)
+    target_link_libraries(stasis_status_size PRIVATE stasis::stasis)
+    target_compile_options(stasis_status_size PRIVATE -fshort-enums)
+    stasis_target_conventions(stasis_status_size)
+endif()
+
 # Compiles a public header on its own, as a host's compiler might see it, in `language` at
 # `standard`, and pedantic. `label` names the check.
 function(stasis_add_header_check header language standard label)

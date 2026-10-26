@@ -46,6 +46,7 @@ extern "C" {
  * Every function that can fail returns one of these: ::STASIS_OK when it succeeded, and otherwise a
  * code for each outcome a host might handle differently. A code's number never changes and is
  * never reused, but any minor release may add codes, so a host handles codes it doesn't know.
+ * The type is 32 bits wide, and holds any code a later release adds.
  * stasis_status_text() describes each code.
  */
 typedef enum stasis_status {
@@ -130,6 +131,11 @@ typedef enum stasis_status {
     STASIS_INVALID_ARGUMENT = 21,
     /** A buffer is smaller than the size Stasis reported for it. */
     STASIS_BUFFER_TOO_SMALL = 22,
+    /**
+     * Not a code. It makes the type 32 bits wide and able to hold any code a later release adds,
+     * both in C++ and with a compiler that makes each enum as small as its values allow.
+     */
+    STASIS_STATUS_MAX_ENUM = 0x7FFFFFFF,
 } stasis_status;
 
 /**

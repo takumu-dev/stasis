@@ -62,5 +62,12 @@ TEST(other_values_are_unknown) {
     }
 }
 
+/* The largest value, which makes the type 32 bits wide and able to hold any later code, isn't a
+ * code. */
+TEST(the_largest_value_is_no_code) {
+    ASSERT_INT_EQ(STASIS_STATUS_MAX_ENUM, 0x7FFFFFFF);
+    ASSERT_STR_EQ(stasis_status_text(STASIS_STATUS_MAX_ENUM), "unknown status");
+}
+
 TEST_LIST(TEST_CASE(every_code_keeps_its_number), TEST_CASE(every_code_has_its_description),
-          TEST_CASE(other_values_are_unknown));
+          TEST_CASE(other_values_are_unknown), TEST_CASE(the_largest_value_is_no_code));

@@ -49,6 +49,8 @@ const char *stasis_status_text(stasis_status status) {
         return "invalid argument";
     case STASIS_BUFFER_TOO_SMALL:
         return "buffer too small";
+    case STASIS_STATUS_MAX_ENUM:
+        break;
     }
     return "unknown status";
 }
