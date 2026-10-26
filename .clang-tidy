@@ -1,0 +1,36 @@
+---
+# The broad groups that apply to C, less the checks that cost more than they catch. A finding at an
+# outside interface is suppressed with `NOLINT(<check>): <reason>`, never a bare NOLINT. The tidy
+# preset makes every finding an error.
+Checks:
+  - -*
+  - bugprone-*
+  - cert-*
+  - clang-analyzer-*
+  - concurrency-*
+  - misc-*
+  - performance-*
+  - portability-*
+  - readability-*
+  - -bugprone-easily-swappable-parameters
+  # Output is checked where it matters, not on every printf.
+  - -cert-err33-c
+  # The Annex K functions it asks for, such as memcpy_s, are missing from most C libraries.
+  - -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+  - -readability-identifier-length
+  - -readability-magic-numbers
+# Stasis's own headers. The C library's and the platform's are system headers, never checked.
+HeaderFilterRegex: '/(include|src|tests)/'
+CheckOptions:
+  # snake_case for everything, and upper case for macros and enumerators.
+  readability-identifier-naming.FunctionCase: lower_case
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.MemberCase: lower_case
+  readability-identifier-naming.StructCase: lower_case
+  readability-identifier-naming.UnionCase: lower_case
+  readability-identifier-naming.EnumCase: lower_case
+  readability-identifier-naming.TypedefCase: lower_case
+  readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+  readability-identifier-naming.EnumConstantCase: UPPER_CASE
+...

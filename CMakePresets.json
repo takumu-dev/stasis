@@ -1,0 +1,368 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "Every preset builds with Ninja, into build/<preset>, with warnings as errors.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_COMPILE_WARNING_AS_ERROR": true,
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "gcc",
+      "hidden": true,
+      "inherits": "linux",
+      "description": "The gcc and g++ on the PATH. g++ compiles only the header checks.",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "clang",
+      "hidden": true,
+      "inherits": "linux",
+      "description": "The clang and clang++ on the PATH. clang++ compiles only the header checks.",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "msvc",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Run from a developer command prompt for MSVC, which puts cl on the PATH.",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "debug",
+      "hidden": true,
+      "description": "Debug, and a static library.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_SHARED_LIBS": false
+      }
+    },
+    {
+      "name": "release",
+      "hidden": true,
+      "description": "Release, and a shared library.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_SHARED_LIBS": true
+      }
+    },
+    {
+      "name": "gcc-debug",
+      "inherits": ["gcc", "debug"],
+      "displayName": "GCC, debug, static"
+    },
+    {
+      "name": "gcc-release",
+      "inherits": ["gcc", "release"],
+      "displayName": "GCC, release, shared"
+    },
+    {
+      "name": "clang-debug",
+      "inherits": ["clang", "debug"],
+      "displayName": "Clang, debug, static"
+    },
+    {
+      "name": "clang-release",
+      "inherits": ["clang", "release"],
+      "displayName": "Clang, release, shared"
+    },
+    {
+      "name": "msvc-debug",
+      "inherits": ["msvc", "debug"],
+      "displayName": "MSVC, debug, static"
+    },
+    {
+      "name": "msvc-release",
+      "inherits": ["msvc", "release"],
+      "displayName": "MSVC, release, shared"
+    },
+    {
+      "name": "sanitize",
+      "inherits": ["clang", "debug"],
+      "displayName": "Clang, debug, static, AddressSanitizer and UndefinedBehaviorSanitizer",
+      "description": "AddressSanitizer instruments everything the build compiles, and UndefinedBehaviorSanitizer only Stasis's own code.",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address",
+        "STASIS_UBSAN": true
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": ["clang", "debug"],
+      "displayName": "Clang, debug, static, ThreadSanitizer",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=thread",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
+      "name": "msvc-asan",
+      "inherits": ["msvc", "debug"],
+      "displayName": "MSVC, debug, static, AddressSanitizer",
+      "description": "Debug without the run-time checks of /RTC1, which AddressSanitizer refuses, and without incremental linking, which it ignores.",
+      "environment": {
+        "CFLAGS": "/fsanitize=address",
+        "CXXFLAGS": "/fsanitize=address"
+      },
+      "cacheVariables": {
+        "CMAKE_C_FLAGS_DEBUG": "/Ob0 /Od",
+        "CMAKE_CXX_FLAGS_DEBUG": "/Ob0 /Od",
+        "CMAKE_EXE_LINKER_FLAGS_DEBUG": "/debug /INCREMENTAL:NO"
+      }
+    },
+    {
+      "name": "tidy",
+      "inherits": ["clang", "debug"],
+      "displayName": "clang-tidy",
+      "description": "Builds the library and the tests with clang-tidy run on Stasis's own C, every finding an error.",
+      "cacheVariables": {
+        "CMAKE_C_CLANG_TIDY": "clang-tidy;--warnings-as-errors=*"
+      }
+    },
+    {
+      "name": "lint",
+      "inherits": "base",
+      "displayName": "Lint",
+      "description": "The checks that build nothing, so far that every source is formatted as clang-format would format it. It needs no compiler beyond configuring, and no tests.",
+      "cacheVariables": {
+        "STASIS_BUILD_TESTS": false,
+        "STASIS_INSTALL": false
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gcc-debug",
+      "configurePreset": "gcc-debug"
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release"
+    },
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug"
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release"
+    },
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug"
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release"
+    },
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "msvc-asan",
+      "configurePreset": "msvc-asan"
+    },
+    {
+      "name": "tidy",
+      "configurePreset": "tidy"
+    },
+    {
+      "name": "lint",
+      "configurePreset": "lint",
+      "targets": ["check-format"]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gcc-debug",
+      "inherits": "test",
+      "configurePreset": "gcc-debug"
+    },
+    {
+      "name": "gcc-release",
+      "inherits": "test",
+      "configurePreset": "gcc-release"
+    },
+    {
+      "name": "clang-debug",
+      "inherits": "test",
+      "configurePreset": "clang-debug"
+    },
+    {
+      "name": "clang-release",
+      "inherits": "test",
+      "configurePreset": "clang-release"
+    },
+    {
+      "name": "msvc-debug",
+      "inherits": "test",
+      "configurePreset": "msvc-debug"
+    },
+    {
+      "name": "msvc-release",
+      "inherits": "test",
+      "configurePreset": "msvc-release"
+    },
+    {
+      "name": "sanitize",
+      "inherits": "test",
+      "configurePreset": "sanitize"
+    },
+    {
+      "name": "tsan",
+      "inherits": "test",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "msvc-asan",
+      "inherits": "test",
+      "configurePreset": "msvc-asan"
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "gcc-debug",
+      "steps": [
+        { "type": "configure", "name": "gcc-debug" },
+        { "type": "build", "name": "gcc-debug" },
+        { "type": "test", "name": "gcc-debug" }
+      ]
+    },
+    {
+      "name": "gcc-release",
+      "steps": [
+        { "type": "configure", "name": "gcc-release" },
+        { "type": "build", "name": "gcc-release" },
+        { "type": "test", "name": "gcc-release" }
+      ]
+    },
+    {
+      "name": "clang-debug",
+      "steps": [
+        { "type": "configure", "name": "clang-debug" },
+        { "type": "build", "name": "clang-debug" },
+        { "type": "test", "name": "clang-debug" }
+      ]
+    },
+    {
+      "name": "clang-release",
+      "steps": [
+        { "type": "configure", "name": "clang-release" },
+        { "type": "build", "name": "clang-release" },
+        { "type": "test", "name": "clang-release" }
+      ]
+    },
+    {
+      "name": "msvc-debug",
+      "steps": [
+        { "type": "configure", "name": "msvc-debug" },
+        { "type": "build", "name": "msvc-debug" },
+        { "type": "test", "name": "msvc-debug" }
+      ]
+    },
+    {
+      "name": "msvc-release",
+      "steps": [
+        { "type": "configure", "name": "msvc-release" },
+        { "type": "build", "name": "msvc-release" },
+        { "type": "test", "name": "msvc-release" }
+      ]
+    },
+    {
+      "name": "sanitize",
+      "steps": [
+        { "type": "configure", "name": "sanitize" },
+        { "type": "build", "name": "sanitize" },
+        { "type": "test", "name": "sanitize" }
+      ]
+    },
+    {
+      "name": "tsan",
+      "steps": [
+        { "type": "configure", "name": "tsan" },
+        { "type": "build", "name": "tsan" },
+        { "type": "test", "name": "tsan" }
+      ]
+    },
+    {
+      "name": "msvc-asan",
+      "steps": [
+        { "type": "configure", "name": "msvc-asan" },
+        { "type": "build", "name": "msvc-asan" },
+        { "type": "test", "name": "msvc-asan" }
+      ]
+    },
+    {
+      "name": "tidy",
+      "steps": [
+        { "type": "configure", "name": "tidy" },
+        { "type": "build", "name": "tidy" }
+      ]
+    },
+    {
+      "name": "lint",
+      "steps": [
+        { "type": "configure", "name": "lint" },
+        { "type": "build", "name": "lint" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+# Build trees, one per preset
+/build/
+
+# Presets for one machine only
+/CMakeUserPresets.json
