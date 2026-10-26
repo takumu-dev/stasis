@@ -1,0 +1,27 @@
+---
+# LLVM's style, with wider indents and lines, and includes grouped as: the file's own header, this
+# project's headers, then the C library's and the platform's.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Right
+QualifierAlignment: Left
+InsertBraces: true
+SeparateDefinitionBlocks: Always
+InsertNewlineAtEOF: true
+
+IncludeBlocks: Regroup
+# A test file's own header is the one it is named after, as sha256_test.c is after sha256.h.
+IncludeIsMainRegex: '(_test)?$'
+MainIncludeChar: Any
+IncludeCategories:
+  # The public header, included as a host includes it.
+  - Regex: '^<stasis[[:alnum:]_]*\.h>$'
+    Priority: 1
+  # Stasis's own private headers and the test harness.
+  - Regex: '^"'
+    Priority: 2
+  # The C library and the platform.
+  - Regex: '^<'
+    Priority: 3
+...
