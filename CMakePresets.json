@@ -157,16 +157,16 @@
       "name": "tidy",
       "inherits": ["clang", "debug"],
       "displayName": "clang-tidy",
-      "description": "Builds the library and the tests with clang-tidy run on Stasis's own C, every finding an error.",
+      "description": "Builds the library and the tests with the pinned wasi-sdk's clang-tidy run on Stasis's own C, every finding an error.",
       "cacheVariables": {
-        "CMAKE_C_CLANG_TIDY": "clang-tidy;--warnings-as-errors=*"
+        "STASIS_CLANG_TIDY": true
       }
     },
     {
       "name": "lint",
       "inherits": "base",
       "displayName": "Lint",
-      "description": "The checks that build nothing, so far that every source is formatted as clang-format would format it. It needs no compiler beyond configuring, and no tests.",
+      "description": "The checks that build nothing, so far that every source is formatted as the pinned wasi-sdk's clang-format would format it. It needs no compiler beyond configuring, and no tests.",
       "cacheVariables": {
         "STASIS_BUILD_TESTS": false,
         "STASIS_INSTALL": false

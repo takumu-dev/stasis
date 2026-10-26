@@ -47,11 +47,11 @@ static void hash_in_pieces(const void *message, size_t size, uint8_t digest[STAS
 }
 
 /* The value of one hexadecimal digit. */
-static uint8_t hex_digit(char digit) {
+static unsigned hex_digit(char digit) {
     const char *digits = "0123456789abcdef";
     const char *found = digit == '\0' ? NULL : strchr(digits, digit);
     ASSERT_TRUE(found != NULL);
-    return (uint8_t)(found - digits);
+    return (unsigned)(found - digits);
 }
 
 /* Decodes `size` bytes from lowercase hexadecimal, which must have exactly that many. */

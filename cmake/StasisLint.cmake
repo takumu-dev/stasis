@@ -3,10 +3,15 @@
 #
 #   check-format  fails if any source differs from what clang-format would make of it
 #   format        reformats every source in place
+#
+# clang-format is the pinned wasi-sdk's, since each release of clang-format formats a little
+# differently.
 
 include_guard(GLOBAL)
 
-find_program(STASIS_CLANG_FORMAT clang-format)
+include(StasisWasiSdk)
+
+stasis_wasi_sdk_program(STASIS_CLANG_FORMAT clang-format)
 if(STASIS_CLANG_FORMAT)
     file(GLOB_RECURSE sources CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/include/*.h"
