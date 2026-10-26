@@ -4,13 +4,15 @@ Stasis is a game scripting library. It runs scripts compiled to WebAssembly in a
 game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, its C API declares the status codes its
-functions will return, and nothing runs scripts yet.
+functions will return, and the library holds the WebAssembly runtime its scripts will run on, but
+nothing runs scripts yet.
 
 ## Requirements
 
 - x86-64 Linux or Windows. Configuring for any other platform stops with a message.
-- A C compiler: GCC 10, Clang 11 or MSVC 14.44, or newer. The library needs no C++ compiler. Stasis's
-  own tests use one to check that the public headers compile as C++.
+- A C compiler: GCC 10, Clang 11 or MSVC 14.44, or newer, and on Windows MSVC's assembler, MASM.
+  The library needs no C++ compiler. Stasis's own tests use one to check that the public headers
+  compile as C++.
 - CMake 3.25 or newer, and Ninja for the presets.
 - For Stasis's own tests and checks, wasi-sdk 34 and wasm-tools 1.262.0, which `tools/install.cmake`
   installs. A host's build of Stasis needs neither.
@@ -74,13 +76,13 @@ cmake --workflow --preset gcc-debug
 
 | Preset | What it builds |
 |---|---|
-| `gcc-debug`, `clang-debug`, `msvc-debug` | Debug, with a static library |
-| `gcc-release`, `clang-release`, `msvc-release` | Release, with a shared library |
-| `sanitize` | Clang, debug and static, with AddressSanitizer on everything and UndefinedBehaviorSanitizer on Stasis's own code |
-| `tsan` | Clang, debug and static, with ThreadSanitizer |
-| `msvc-asan` | MSVC, debug and static, with AddressSanitizer |
+| `gcc-debug`, `clang-debug`, `msvc-debug` | Debug, with a static library and the classic interpreter |
+| `gcc-release`, `clang-release`, `msvc-release` | Release, with a shared library and the fast interpreter |
+| `sanitize` | Clang, debug, static and fast, with AddressSanitizer on everything and UndefinedBehaviorSanitizer on Stasis's own code |
+| `tsan` | Clang, debug, static and fast, with ThreadSanitizer |
+| `msvc-asan` | MSVC, debug, static and classic, with AddressSanitizer |
 | `tidy` | Clang, debug, with wasi-sdk's clang-tidy run on Stasis's own code |
-| `lint` | Nothing: it checks that the sources are formatted as wasi-sdk's clang-format would format them |
+| `lint` | Nothing: it checks that the sources are formatted as wasi-sdk's clang-format would format them, and its configuring runs the licence check |
 
 The presets use the compilers on the `PATH`: `gcc` and `g++`, `clang` and `clang++`, or `cl`, from a
 developer command prompt for MSVC. Each builds into `build/<preset>`. Warnings are errors in every
@@ -100,6 +102,47 @@ stops if either is missing or at another version:
 The `format` and `check-format` targets and the `tidy` preset use wasi-sdk's clang-format and
 clang-tidy too, never others, since each release of them formats and checks a little differently.
 
+## WAMR and other third-party code
+
+Scripts run on [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime), the WebAssembly
+Micro Runtime, which is compiled into Stasis's own library. WAMR is part of Stasis, not a dependency
+of the host: Stasis chooses its features, sends its logging and printing to functions of its own,
+which discard them, and builds it to leave the host's process alone. WAMR checks bounds in
+software, so it installs no signal or exception handler and leaves the host's thread stacks alone.
+The tests check that the library references none of `sigaction`, `sigaltstack`, `setjmp` and
+`longjmp`.
+
+`STASIS_WAMR_INTERPRETER` chooses the interpreter: `fast`, the default, or `classic`, whose trap
+reports give offsets in a script's module that map to its source lines.
+
+Everything the build compiles from elsewhere lives under `third_party/<name>/`, unmodified and
+pinned to a release, and `third_party/dependencies.json` lists each dependency's version, upstream
+commit, SPDX licence and whether it ships, meaning it's compiled into the library.
+`third_party/wamr/` holds only the files of WAMR 2.4.5 that the build uses, and its licences.
+`tools/vendor_wamr.cmake` copies them from a git checkout of WAMR's release, and
+`cmake/StasisWamrFiles.cmake` lists them:
+
+```sh
+git clone --depth 1 --branch WAMR-2.4.5 https://github.com/bytecodealliance/wasm-micro-runtime.git ../wamr
+cmake -DSOURCE=../wamr -P tools/vendor_wamr.cmake
+```
+
+Upgrading WAMR is deliberate. Update its entry in `third_party/dependencies.json`, run the script on
+a checkout of the new release, and derive the file lists and the definitions in
+`cmake/StasisWamr.cmake` again, against what WAMR's own `build-scripts/runtime_lib.cmake` would
+choose.
+
+Configuring Stasis as the top-level project runs the licence check, `cmake/check_licenses.cmake`.
+It fails unless:
+
+- each dependency's licence is one that `third_party/licenses.json` allows: Zlib, MIT, BSD-2-Clause,
+  BSD-3-Clause, BSL-1.0, ISC, Apache-2.0 with or without the LLVM exception, CC0-1.0 or Unlicense,
+  or one an override gives for the version it reviewed;
+- each directory under `third_party/` is a dependency the manifest names;
+- `THIRD_PARTY_NOTICES.md` lists each dependency that ships, with its licence files. Whatever ships
+  Stasis's library ships those dependencies too, and carries this file with it. To write it again,
+  run `cmake -DWRITE_NOTICES=THIRD_PARTY_NOTICES.md -P cmake/check_licenses.cmake`.
+
 ## Using Stasis in a host
 
 A host, the game or engine that embeds Stasis, adds it to its own CMake build with
@@ -110,9 +153,15 @@ add_subdirectory(stasis)
 target_link_libraries(host PRIVATE stasis::stasis)
 ```
 
-The build never downloads anything. The library is static unless `BUILD_SHARED_LIBS` is on, and a
-shared library exports Stasis's API alone. A host's build of Stasis never has warnings turned into
-errors, so a newer compiler can't break it.
+The build never downloads anything. The library is static unless `BUILD_SHARED_LIBS` is on, with
+WAMR inside it either way. A shared library exports Stasis's API alone, apart from
+`wasm_runtime_malloc` and `wasm_runtime_free`, which WAMR always exports from a DLL on Windows. A
+static library carries WAMR's own global symbols, some with generic names such as `read_leb`, so a
+host that links another copy of WAMR beside it should link Stasis shared. A host's build of Stasis
+never has warnings turned into errors, so a newer compiler can't break it.
+
+Whatever ships Stasis ships WAMR, whose licence asks for its notices to go with it: they're in
+`THIRD_PARTY_NOTICES.md`, which is installed with the library.
 
 These options default to on when Stasis is the top-level project and off when it's a subproject:
 
@@ -120,4 +169,7 @@ These options default to on when Stasis is the top-level project and off when it
 |---|---|
 | `STASIS_BUILD_TESTS` | Builds Stasis's tests |
 | `STASIS_BUILD_TOOLS` | Adds the `check-format` and `format` targets, where the pinned wasi-sdk is found |
-| `STASIS_INSTALL` | Installs the library and its public header |
+| `STASIS_INSTALL` | Installs the library, its public header and the third-party notices |
+
+`STASIS_WAMR_INTERPRETER` chooses the interpreter scripts run on, `fast` or `classic`, in a host's
+build as in Stasis's own.

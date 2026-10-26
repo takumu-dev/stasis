@@ -69,57 +69,60 @@
     {
       "name": "debug",
       "hidden": true,
-      "description": "Debug, and a static library.",
+      "description": "Debug, a static library, and the classic interpreter.",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "BUILD_SHARED_LIBS": false
+        "BUILD_SHARED_LIBS": false,
+        "STASIS_WAMR_INTERPRETER": "classic"
       }
     },
     {
       "name": "release",
       "hidden": true,
-      "description": "Release, and a shared library.",
+      "description": "Release, a shared library, and the fast interpreter.",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "BUILD_SHARED_LIBS": true
+        "BUILD_SHARED_LIBS": true,
+        "STASIS_WAMR_INTERPRETER": "fast"
       }
     },
     {
       "name": "gcc-debug",
       "inherits": ["gcc", "debug"],
-      "displayName": "GCC, debug, static"
+      "displayName": "GCC, debug, static, classic interpreter"
     },
     {
       "name": "gcc-release",
       "inherits": ["gcc", "release"],
-      "displayName": "GCC, release, shared"
+      "displayName": "GCC, release, shared, fast interpreter"
     },
     {
       "name": "clang-debug",
       "inherits": ["clang", "debug"],
-      "displayName": "Clang, debug, static"
+      "displayName": "Clang, debug, static, classic interpreter"
     },
     {
       "name": "clang-release",
       "inherits": ["clang", "release"],
-      "displayName": "Clang, release, shared"
+      "displayName": "Clang, release, shared, fast interpreter"
     },
     {
       "name": "msvc-debug",
       "inherits": ["msvc", "debug"],
-      "displayName": "MSVC, debug, static"
+      "displayName": "MSVC, debug, static, classic interpreter"
     },
     {
       "name": "msvc-release",
       "inherits": ["msvc", "release"],
-      "displayName": "MSVC, release, shared"
+      "displayName": "MSVC, release, shared, fast interpreter"
     },
     {
       "name": "sanitize",
       "inherits": ["clang", "debug"],
-      "displayName": "Clang, debug, static, AddressSanitizer and UndefinedBehaviorSanitizer",
-      "description": "AddressSanitizer instruments everything the build compiles, and UndefinedBehaviorSanitizer only Stasis's own code.",
+      "displayName": "Clang, debug, static, fast interpreter, AddressSanitizer and UndefinedBehaviorSanitizer",
+      "description": "AddressSanitizer instruments everything the build compiles, and UndefinedBehaviorSanitizer only Stasis's own code. The fast interpreter, where msvc-asan has the classic one.",
       "cacheVariables": {
+        "STASIS_WAMR_INTERPRETER": "fast",
         "CMAKE_C_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
         "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address",
@@ -130,8 +133,10 @@
     {
       "name": "tsan",
       "inherits": ["clang", "debug"],
-      "displayName": "Clang, debug, static, ThreadSanitizer",
+      "displayName": "Clang, debug, static, fast interpreter, ThreadSanitizer",
+      "description": "The fast interpreter, whose loader writes a static on every load.",
       "cacheVariables": {
+        "STASIS_WAMR_INTERPRETER": "fast",
         "CMAKE_C_FLAGS": "-fsanitize=thread",
         "CMAKE_CXX_FLAGS": "-fsanitize=thread",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
@@ -141,7 +146,7 @@
     {
       "name": "msvc-asan",
       "inherits": ["msvc", "debug"],
-      "displayName": "MSVC, debug, static, AddressSanitizer",
+      "displayName": "MSVC, debug, static, classic interpreter, AddressSanitizer",
       "description": "Debug without the run-time checks of /RTC1, which AddressSanitizer refuses, and without incremental linking, which it ignores.",
       "environment": {
         "CFLAGS": "/fsanitize=address",
@@ -166,7 +171,7 @@
       "name": "lint",
       "inherits": "base",
       "displayName": "Lint",
-      "description": "The checks that build nothing, so far that every source is formatted as the pinned wasi-sdk's clang-format would format it. It needs no compiler beyond configuring, and no tests.",
+      "description": "The checks that build nothing: the licence check, which configuring runs, and that every source is formatted as the pinned wasi-sdk's clang-format would format it. It needs no compiler beyond configuring, and no tests.",
       "cacheVariables": {
         "STASIS_BUILD_TESTS": false,
         "STASIS_INSTALL": false

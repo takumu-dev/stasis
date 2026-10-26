@@ -2,6 +2,8 @@
 #
 #   harness.*  the harness's own checks
 #   headers.*  what the public headers include
+#   library.*  what the built library holds, exports and references
+#   licenses.* the licence check, on dependencies of its own
 #   scripts.*  scripts built from source, as the tests build them
 #   sha256.*   SHA-256 against NIST's test vectors
 #   status.*   the status codes, through the C API
@@ -17,7 +19,37 @@ include(StasisTesting)
 include(StasisScripts)
 
 add_subdirectory(harness)
+add_subdirectory(licenses)
 add_subdirectory(scripts)
+
+# The test-only library: the core and WAMR compiled again, as a static library of their own, for the
+# few tests that need what the library proper hides. In it, WAMR's printing goes to the test's
+# output.
+stasis_add_wamr(stasis_wamr_testing VPRINTF stasis_testing_vprintf)
+add_library(stasis_testing STATIC
+    ${STASIS_CORE_SOURCES}
+    wamr_output.c
+    $<TARGET_OBJECTS:stasis_sha256>
+)
+target_include_directories(stasis_testing PUBLIC "${PROJECT_SOURCE_DIR}/include")
+stasis_target_holds_wamr(stasis_testing stasis_wamr_testing)
+stasis_target_conventions(stasis_testing)
+
+# A test program links only the objects it calls from a static library, so a program that links
+# the whole of each shows that all of WAMR links, with the system libraries it calls. A shared
+# library is linked whole already.
+set(whole_libraries stasis_testing)
+get_target_property(library_type stasis TYPE)
+if(library_type STREQUAL "STATIC_LIBRARY")
+    list(APPEND whole_libraries stasis)
+endif()
+foreach(library IN LISTS whole_libraries)
+    add_executable(stasis_link_check_${library} link_check.c)
+    target_link_libraries(stasis_link_check_${library} PRIVATE
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,${library}>"
+    )
+    stasis_target_conventions(stasis_link_check_${library})
+endforeach()
 
 # SHA-256 is the one part of the library tested directly, since no function of the API can hand it
 # known messages. NIST's files are read from the source tree.
@@ -89,3 +121,30 @@ add_test(NAME headers.include_only_standard_headers
         "-DHEADERS=${public_headers}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/check_header_includes.cmake"
 )
+
+# The library's own checks read the symbols it defines, exports and references: with nm, or with
+# dumpbin, which sits beside MSVC's linker. Only a shared library exports anything.
+if(MSVC)
+    cmake_path(GET CMAKE_LINKER PARENT_PATH linker_dir)
+    find_program(STASIS_DUMPBIN dumpbin HINTS "${linker_dir}" REQUIRED)
+    set(symbol_tool "-DDUMPBIN=${STASIS_DUMPBIN}")
+else()
+    set(symbol_tool "-DNM=${CMAKE_NM}")
+endif()
+set(library_checks holds_wamr references_no_signal_or_jump_functions)
+if(library_type STREQUAL "SHARED_LIBRARY")
+    set(shared TRUE)
+    list(APPEND library_checks exports_only_stasis_api)
+else()
+    set(shared FALSE)
+endif()
+foreach(check IN LISTS library_checks)
+    add_test(NAME library.${check}
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCHECK=${check}"
+            "-DLIBRARY=$<TARGET_FILE:stasis>"
+            "-DSHARED=${shared}"
+            "${symbol_tool}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_library.cmake"
+    )
+endforeach()
