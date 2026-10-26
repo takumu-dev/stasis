@@ -12,6 +12,8 @@ functions will return, and nothing runs scripts yet.
 - A C compiler: GCC 10, Clang 11 or MSVC 14.44, or newer. The library needs no C++ compiler. Stasis's
   own tests use one to check that the public headers compile as C++.
 - CMake 3.25 or newer, and Ninja for the presets.
+- For Stasis's own tests, wasi-sdk 34 and wasm-tools 1.262.0, which `tools/install.cmake` installs.
+  A host's build of Stasis needs neither.
 
 ### Compilers
 
@@ -88,6 +90,12 @@ preset. Settings for one machine, such as a compiler under another name, belong 
 Each test case is a CTest test of its own, named after its program and its case, such as
 `sha256.nist_monte_carlo`. To run some of them, use for example
 `ctest --preset gcc-debug -R '^sha256\.'`. The `format` target reformats every source in place.
+
+The tests build the scripts they run from source, so configuring them finds the pinned tools, and
+stops if either is missing or at another version:
+
+- wasi-sdk, in `STASIS_WASI_SDK_PATH`, which defaults to the `WASI_SDK_PATH` environment variable;
+- wasm-tools, on the `PATH`, or in `STASIS_WASM_TOOLS`.
 
 ## Using Stasis in a host
 

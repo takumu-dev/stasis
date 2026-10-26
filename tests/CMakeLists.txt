@@ -2,18 +2,22 @@
 #
 #   harness.*  the harness's own checks
 #   headers.*  what the public headers include
+#   scripts.*  scripts built from source, as the tests build them
 #   sha256.*   SHA-256 against NIST's test vectors
 #   status.*   the status codes, through the C API
 #
-# Every program is built on the harness in harness/. The build itself checks that each public header
-# compiles on its own as C99 and as C++, with the presets' warnings as errors. Only those checks are
-# C++: the library never is.
+# Every program is built on the harness in harness/. The scripts the tests run are built from source
+# with the pinned wasm-tools and wasi-sdk, so configuring the tests needs both. The build itself
+# checks that each public header compiles on its own as C99 and as C++, with the presets' warnings
+# as errors. Only those checks are C++: the library never is.
 
 enable_language(CXX)
 
 include(StasisTesting)
+include(StasisScripts)
 
 add_subdirectory(harness)
+add_subdirectory(scripts)
 
 # SHA-256 is the one part of the library tested directly, since no function of the API can hand it
 # known messages. NIST's files are read from the source tree.

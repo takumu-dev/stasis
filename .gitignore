@@ -3,3 +3,6 @@
 
 # Presets for one machine only
 /CMakeUserPresets.json
+
+# Scripts are built from source, never committed
+*.wasm
