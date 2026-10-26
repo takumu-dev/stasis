@@ -12,8 +12,8 @@ functions will return, and nothing runs scripts yet.
 - A C compiler: GCC 10, Clang 11 or MSVC 14.44, or newer. The library needs no C++ compiler. Stasis's
   own tests use one to check that the public headers compile as C++.
 - CMake 3.25 or newer, and Ninja for the presets.
-- For Stasis's own tests, wasi-sdk 34 and wasm-tools 1.262.0, which `tools/install.cmake` installs.
-  A host's build of Stasis needs neither.
+- For Stasis's own tests and checks, wasi-sdk 34 and wasm-tools 1.262.0, which `tools/install.cmake`
+  installs. A host's build of Stasis needs neither.
 
 ### Compilers
 
@@ -79,8 +79,8 @@ cmake --workflow --preset gcc-debug
 | `sanitize` | Clang, debug and static, with AddressSanitizer on everything and UndefinedBehaviorSanitizer on Stasis's own code |
 | `tsan` | Clang, debug and static, with ThreadSanitizer |
 | `msvc-asan` | MSVC, debug and static, with AddressSanitizer |
-| `tidy` | Clang, debug, with clang-tidy run on Stasis's own code |
-| `lint` | Nothing: it checks that the sources are formatted as clang-format would format them |
+| `tidy` | Clang, debug, with wasi-sdk's clang-tidy run on Stasis's own code |
+| `lint` | Nothing: it checks that the sources are formatted as wasi-sdk's clang-format would format them |
 
 The presets use the compilers on the `PATH`: `gcc` and `g++`, `clang` and `clang++`, or `cl`, from a
 developer command prompt for MSVC. Each builds into `build/<preset>`. Warnings are errors in every
@@ -96,6 +96,9 @@ stops if either is missing or at another version:
 
 - wasi-sdk, in `STASIS_WASI_SDK_PATH`, which defaults to the `WASI_SDK_PATH` environment variable;
 - wasm-tools, on the `PATH`, or in `STASIS_WASM_TOOLS`.
+
+The `format` and `check-format` targets and the `tidy` preset use wasi-sdk's clang-format and
+clang-tidy too, never others, since each release of them formats and checks a little differently.
 
 ## Using Stasis in a host
 
@@ -116,5 +119,5 @@ These options default to on when Stasis is the top-level project and off when it
 | Option | What it does |
 |---|---|
 | `STASIS_BUILD_TESTS` | Builds Stasis's tests |
-| `STASIS_BUILD_TOOLS` | Adds the `check-format` and `format` targets |
+| `STASIS_BUILD_TOOLS` | Adds the `check-format` and `format` targets, where the pinned wasi-sdk is found |
 | `STASIS_INSTALL` | Installs the library and its public header |

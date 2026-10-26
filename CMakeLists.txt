@@ -43,6 +43,23 @@ option(STASIS_UBSAN
     "Build Stasis's own code with UndefinedBehaviorSanitizer, as the sanitize preset does."
     OFF
 )
+option(STASIS_CLANG_TIDY
+    "Run wasi-sdk's clang-tidy on Stasis's own code as it builds, as the tidy preset does."
+    OFF
+)
+
+# clang-tidy comes from the pinned wasi-sdk, so every machine checks the code alike. wasi-sdk's LLVM
+# targets WebAssembly alone, so its clang-tidy is told the target Stasis builds for, and then reads
+# this machine's headers.
+if(STASIS_CLANG_TIDY)
+    include(StasisWasiSdk)
+    stasis_wasi_sdk_program(stasis_clang_tidy clang-tidy REQUIRED_BY "STASIS_CLANG_TIDY")
+    set(CMAKE_C_CLANG_TIDY
+        "${stasis_clang_tidy}"
+        --extra-arg=--target=x86_64-linux-gnu
+        --warnings-as-errors=*
+    )
+endif()
 
 # A program on Windows finds a DLL beside it, so Stasis's own build puts the shared library and the
 # tests in one directory.
