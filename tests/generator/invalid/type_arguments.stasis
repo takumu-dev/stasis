@@ -1,0 +1,10 @@
+interface test:type_arguments@1.0.0;
+group world {
+    record vec2 { x: f32<u8>, y: f32 }
+    fn find(names: string<u8, u8>) -> vec2<f32>;
+}
+script npc { fn tick(); }
+
+//! type_arguments.stasis:3:25: error: type arguments after `f32`, but no type takes any yet
+//! type_arguments.stasis:4:26: error: type arguments after `string`, but no type takes any yet
+//! type_arguments.stasis:4:43: error: type arguments after `vec2`, but no type takes any yet

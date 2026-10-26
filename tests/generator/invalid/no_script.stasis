@@ -1,0 +1,5 @@
+interface test:no_script@1.0.0;
+
+group world {}
+
+//! no_script.stasis:1:1: error: the interface declares no kind of script, but it needs exactly one

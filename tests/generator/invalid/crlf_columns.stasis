@@ -1,0 +1,6 @@
+interface test:crlf@1.0.0;
+group World {}
+script npc { fn tick(Frame: u64); }
+
+//! crlf_columns.stasis:2:7: error: `World` isn't a valid name: names are lowercase
+//! crlf_columns.stasis:3:22: error: `Frame` isn't a valid name: names are lowercase

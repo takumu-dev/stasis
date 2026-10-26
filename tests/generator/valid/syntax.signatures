@@ -1,0 +1,10 @@
+earlier.spawn (record{origin:record{x:f64,y:f64},size:record{x:f64,y:f64}})->handle(later.widget) 37dcab98d87d08ca
+later.widget.move_to (handle(later.widget),record{x:f64,y:f64})->record{x:f64,y:f64} 5aebf1f6b22d9a22
+later.widget.sibling (handle(later.widget))->handle(later.gadget) 98e1e254a8595345
+later.gadget.sibling (handle(later.gadget))->handle(later.widget) 6eb537c721e02b35
+later.every (u8,u16,u32,u64,s8,s16,s32,s64,f32,f64,bool,string) 56237db9d7b62d6e
+later.deep (record{inner:record{origin:record{x:f64,y:f64},size:record{x:f64,y:f64}},flag:bool})->record{inner:record{origin:record{x:f64,y:f64},size:record{x:f64,y:f64}},flag:bool} f01d3591116369f6
+runner.start () 2e38e77b22c314a4
+runner.finish (s32,string)->bool 8ef7b4883995134a
+runner.report ()->record{x:f64,y:f64} 5ed14ae8bffe1d93
+runner.handle (handle(later.widget),u8,u8,u8)->handle(later.widget) c47fd1317713d5b0

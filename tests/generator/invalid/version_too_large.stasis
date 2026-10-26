@@ -1,0 +1,4 @@
+interface test:version@4294967296.0.0;
+script npc { fn tick(); }
+
+//! version_too_large.stasis:1:24: error: `4294967296` is too large: a version number is at most 4294967295

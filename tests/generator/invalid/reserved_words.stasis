@@ -1,0 +1,23 @@
+interface test:reserved@1.0.0;
+
+group world {
+    enum mood { happy, sad }
+    flags state { awake }
+    variant shape { circle(f32) }
+    record result { ok: bool }
+    fn names(list: list<u8>, of: option<char>) -> tuple<u8, u8>;
+}
+
+script npc {
+    fn tick(by: char);
+}
+
+//! reserved_words.stasis:4:5: error: `enum` is reserved for a later version of the format
+//! reserved_words.stasis:5:5: error: `flags` is reserved for a later version of the format
+//! reserved_words.stasis:6:5: error: `variant` is reserved for a later version of the format
+//! reserved_words.stasis:7:12: error: `result` is reserved for a later version of the format
+//! reserved_words.stasis:8:14: error: `list` is reserved for a later version of the format
+//! reserved_words.stasis:8:20: error: `list` is reserved for a later version of the format
+//! reserved_words.stasis:8:34: error: `option` is reserved for a later version of the format
+//! reserved_words.stasis:8:51: error: `tuple` is reserved for a later version of the format
+//! reserved_words.stasis:12:17: error: `char` is reserved for a later version of the format

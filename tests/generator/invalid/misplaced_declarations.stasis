@@ -1,0 +1,29 @@
+interface test:misplaced@1.0.0;
+
+fn find() -> u8;
+
+group world {
+    optional fn find() -> u8;
+    uses combat;
+    object entity {
+        optional fn name() -> string;
+    }
+}
+
+}
+
+script npc {
+    record vec2 { x: f32 }
+    use world::{entity};
+    optional tick();
+    fn tick();
+}
+
+//! misplaced_declarations.stasis:3:1: error: expected `group` or `script`, found `fn`
+//! misplaced_declarations.stasis:6:5: error: only an entry point can be optional
+//! misplaced_declarations.stasis:7:5: error: `uses` belongs in a kind of script: a group brings in records and objects with `use`
+//! misplaced_declarations.stasis:9:9: error: only an entry point can be optional
+//! misplaced_declarations.stasis:13:1: error: expected `group` or `script`, found `}`
+//! misplaced_declarations.stasis:16:5: error: a kind of script declares only its `uses` and its entry points
+//! misplaced_declarations.stasis:17:5: error: a kind of script declares only its `uses` and its entry points
+//! misplaced_declarations.stasis:18:14: error: expected `fn`, found `tick`

@@ -1,0 +1,16 @@
+interface test:built_in@1.0.0;
+
+group string {
+    record u8 { bool: f32 }
+    object f64 {}
+    fn s32(u16: u8);
+}
+
+script npc {}
+
+//! built_in_type_names.stasis:3:7: error: `string` is a built-in type, and can't be a name
+//! built_in_type_names.stasis:4:12: error: `u8` is a built-in type, and can't be a name
+//! built_in_type_names.stasis:4:17: error: `bool` is a built-in type, and can't be a name
+//! built_in_type_names.stasis:5:12: error: `f64` is a built-in type, and can't be a name
+//! built_in_type_names.stasis:6:8: error: `s32` is a built-in type, and can't be a name
+//! built_in_type_names.stasis:6:12: error: `u16` is a built-in type, and can't be a name

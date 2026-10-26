@@ -1,0 +1,4 @@
+interface test:version@1.02.0;
+script npc { fn tick(); }
+
+//! version_leading_zero.stasis:1:26: error: `02` has a leading zero, which a version number can't have

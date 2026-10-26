@@ -1,0 +1,18 @@
+interface test:records@1.0.0;
+
+group world {
+    record node { value: u32, next: node }
+    record a { b: b }
+    record b { c: c, also: u8 }
+    record c { a: a }
+    record d { a: a }
+}
+
+script npc { fn tick(); }
+
+//! record_contains_itself.stasis:4:12: error: record `node` contains itself
+//! record_contains_itself.stasis:4:31: note: `node.next` has type `node`
+//! record_contains_itself.stasis:5:12: error: record `a` contains itself
+//! record_contains_itself.stasis:5:16: note: `a.b` has type `b`
+//! record_contains_itself.stasis:6:16: note: `b.c` has type `c`
+//! record_contains_itself.stasis:7:16: note: `c.a` has type `a`

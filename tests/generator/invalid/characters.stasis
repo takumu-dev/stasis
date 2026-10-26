@@ -1,0 +1,16 @@
+interface test:characters@1.0.0;
+
+/* A block comment,
+   over two lines. */
+group world {
+    fn find(name: string) -> u8; #
+    fn light() -> f32;
+    /
+}
+
+script npc { fn tick(); }
+
+//! characters.stasis:3:1: error: there are no block comments: a comment starts with // and ends with its line
+//! characters.stasis:6:34: error: unexpected character `#`
+//! characters.stasis:7:23: error: unexpected control character 0x01
+//! characters.stasis:8:5: error: unexpected character `/`

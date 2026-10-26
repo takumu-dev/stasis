@@ -1,0 +1,6 @@
+world.entity.name (handle(world.entity))->string 1d67b9acd7bf1687
+world.entity.position (handle(world.entity))->record{x:f32,y:f32} 4a22e6b7eb7db951
+world.find (string)->handle(world.entity) 9f6e056c86b04946
+combat.attack (handle(world.entity),u32)->bool 191815f3954f6a82
+npc.tick (u64) 37ab64a28242fa4b
+npc.on_hit (handle(world.entity),u32) 8cbc160141d65d63

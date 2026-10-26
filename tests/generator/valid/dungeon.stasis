@@ -1,0 +1,58 @@
+/// A toy dungeon whose non-player characters are scripts.
+interface example:dungeon@1.0.0;
+
+group world {
+    record vec2 { x: f32, y: f32 }
+
+    /// Anything that lives in the dungeon.
+    object entity {
+        fn name() -> string;
+        fn position() -> vec2;
+        fn alive() -> bool;
+        fn level() -> u8;
+        /// Changes the entity's mood by `by` and returns the new mood.
+        fn cheer(by: s8) -> s8;
+        /// Heals the entity by `amount`, which may be negative, and returns its health.
+        fn heal(amount: s16) -> s16;
+        /// Walks towards `to` at `speed` tiles a tick and returns the distance covered.
+        fn walk(to: vec2, speed: f32) -> f64;
+    }
+
+    /// Aborts the call if no entity has that name.
+    fn find(name: string) -> entity;
+    /// Returns `from` itself when nothing else is within `radius`.
+    fn nearest(from: entity, radius: f64) -> entity;
+    fn light(at: vec2) -> f32;
+}
+
+group combat {
+    use world::{entity, vec2};
+
+    record hit { by: entity, weapon: string, damage: u32, at: vec2 }
+
+    fn attack(target: entity, damage: u32) -> bool;
+    fn last_hit(of: entity) -> hit;
+    /// Raises the alarm about a hit and returns how many guards heard it.
+    fn alarm(about: hit) -> u32;
+}
+
+group trade {
+    use world::{entity};
+
+    record offer { item: u16, quantity: u8, price: u32, discount: s32, until: u64 }
+
+    fn stock(item: u16) -> u16;
+    fn price(item: u16, quantity: u8) -> u32;
+    /// Sells to `to` on `terms` and returns the merchant's profit.
+    fn sell(to: entity, terms: offer) -> s32;
+    /// Pays `amount`, which may be negative, to `to` and returns its new purse.
+    fn pay(to: entity, amount: s64) -> s64;
+}
+
+script npc {
+    uses world, combat, trade;
+
+    fn tick(frame: u64);
+    optional fn on_hit(blow: hit) -> bool;
+    optional fn describe() -> string;
+}

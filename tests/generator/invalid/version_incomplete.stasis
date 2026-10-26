@@ -1,0 +1,4 @@
+interface test:version@1.2;
+script npc { fn tick(); }
+
+//! version_incomplete.stasis:1:27: error: expected `.`, found `;`

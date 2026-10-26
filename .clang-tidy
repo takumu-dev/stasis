@@ -23,7 +23,7 @@ Checks:
   # every element.
   - -readability-trailing-comma
 # Stasis's own headers. The C library's and the platform's are system headers, never checked.
-HeaderFilterRegex: '/(include|src|tests)/'
+HeaderFilterRegex: '/(generator|include|src|tests)/'
 CheckOptions:
   # A shift by a constant, such as `value >> 24`, is no sign of a signed operand.
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true

@@ -1,0 +1,8 @@
+interface test:invalid_utf8@1.0.0;
+// A stray continuation byte: €, and a truncated sequence: â‚.
+/// An overlong encoding: À¯.
+group world {}
+script npc { fn tick(); }
+
+//! invalid_utf8.stasis:2:31: error: invalid UTF-8 in a comment
+//! invalid_utf8.stasis:3:27: error: invalid UTF-8 in a comment

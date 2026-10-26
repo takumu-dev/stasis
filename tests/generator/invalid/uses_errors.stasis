@@ -1,0 +1,11 @@
+interface test:uses_errors@1.0.0;
+
+group world {}
+
+script npc {
+    uses world, combat, npc;
+    fn tick();
+}
+
+//! uses_errors.stasis:6:17: error: there's no group `combat`
+//! uses_errors.stasis:6:25: error: `npc` is a kind of script, not a group

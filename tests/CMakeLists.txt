@@ -1,12 +1,13 @@
 # Stasis's tests, each case a CTest test of its own:
 #
-#   harness.*  the harness's own checks
-#   headers.*  what the public headers include
-#   library.*  what the built library holds, exports and references
-#   licenses.* the licence check, on dependencies of its own
-#   scripts.*  scripts built from source, as the tests build them
-#   sha256.*   SHA-256 against NIST's test vectors
-#   status.*   the status codes, through the C API
+#   generator.*  stasis-gen, through its command line
+#   harness.*    the harness's own checks
+#   headers.*    what the public headers include
+#   library.*    what the built library holds, exports and references
+#   licenses.*   the licence check, on dependencies of its own
+#   scripts.*    scripts built from source, as the tests build them
+#   sha256.*     SHA-256 against NIST's test vectors
+#   status.*     the status codes, through the C API
 #
 # Every program is built on the harness in harness/. The scripts the tests run are built from source
 # with the pinned wasm-tools and wasi-sdk, so configuring the tests needs both. The build itself
@@ -18,6 +19,9 @@ enable_language(CXX)
 include(StasisTesting)
 include(StasisScripts)
 
+if(TARGET stasis_generator)
+    add_subdirectory(generator)
+endif()
 add_subdirectory(harness)
 add_subdirectory(licenses)
 add_subdirectory(scripts)

@@ -1,0 +1,3 @@
+// Nothing but comments.
+//! empty.stasis:4:1: error: expected the interface's header, `interface <namespace>:<name>@<version>;`, found the end of the file
+//! empty.stasis:4:1: error: the interface declares no kind of script, but it needs exactly one

@@ -1,0 +1,4 @@
+﻿interface test:bom@1.0.0;
+script npc { fn tick(); }
+
+//! byte_order_mark.stasis:1:1: error: the file starts with a byte order mark, which an interface file can't have
