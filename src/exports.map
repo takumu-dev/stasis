@@ -1,0 +1,9 @@
+/* What a shared Stasis exports on Linux: the functions of its API, which are all named stasis_*,
+ * and nothing else. Hidden visibility keeps the rest of Stasis's own code and WAMR's C local, and
+ * this does the same for WAMR's assembly. */
+{
+    global:
+        stasis_*;
+    local:
+        *;
+};
