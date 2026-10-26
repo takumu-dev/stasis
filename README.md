@@ -35,6 +35,32 @@ Stasis is tested with each compiler at its floor and at its newest release. Vers
 supported but not tested. Other compilers, such as clang-cl and MinGW-w64's GCC, are untested, but
 nothing in Stasis should rule them out: fixes for them are welcome, though not promised.
 
+## Tools
+
+Every tool that builds or checks Stasis, apart from the compilers, is pinned in `tools/pins.json`:
+its version, and the URL and SHA-256 of its release for x86-64 Linux and for Windows.
+
+| Tool | Version | What it's for |
+|---|---|---|
+| wasi-sdk | 34 | The tests build C scripts with its clang. Its clang-format and clang-tidy format and check Stasis's own code. |
+| wasm-tools | 1.262.0 | The tests build WAT modules with it, and validate scripts. |
+| LLVM | 23.1.4 | The newest Clang, to test Stasis with. |
+| CMake | 4.4.4 | The newest CMake, to test Stasis with. |
+| Ninja | 1.13.2 | The presets. |
+| Doxygen | 1.18.0 | The API documentation. |
+
+`tools/install.cmake` downloads them, checks each download against its SHA-256, and installs only
+the parts the build uses. Each tool goes into a directory of its own under the prefix:
+
+```sh
+cmake -DPREFIX=$HOME/.local/opt/stasis-tools -P tools/install.cmake
+```
+
+`-DTOOLS="wasi-sdk;wasm-tools"` installs only those two, which are all the tests need. The script
+ends by printing where the build finds each tool: wasi-sdk through the `WASI_SDK_PATH` environment
+variable, and the rest on the `PATH`. Run again, it replaces only the tools whose pins have moved.
+It runs apart from the build, which never downloads anything.
+
 ## Building
 
 Every configuration Stasis builds itself is a preset in `CMakePresets.json`, and a workflow preset
