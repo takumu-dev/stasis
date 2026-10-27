@@ -4,12 +4,22 @@
 # branch is built by its push, main only ever merges a tree its release or hotfix branch has tested,
 # and with every image pinned, a run on a schedule would test nothing new.
 #
-# Each job is one workflow preset, run in an image pinned to its digest, so CI holds no build logic
-# of its own, and any job runs on a developer's machine with one command, as the README shows.
+# Each job is one workflow preset, run in an image pinned to its digest or its date, so CI holds no
+# build logic of its own, and any Linux job runs on a developer's machine with one command, as the
+# README shows.
 #
-# The images are built from ci/ and pushed by hand. stasis-ci-floor has each compiler at its floor,
-# in the Steam Runtime's SDK, and stasis-ci-newest has their newest releases and also runs the
-# sanitizers and the checks.
+# The Linux images are built from ci/ and pushed by hand. stasis-ci-floor has each compiler at its
+# floor, in the Steam Runtime's SDK, and stasis-ci-newest has their newest releases and also runs
+# the sanitizers and the checks.
+#
+# Windows jobs run on CircleCI's own image, which can't be replaced by one of Stasis's, so it's
+# pinned by its date. It has the Build Tools of Visual Studio 2022 and of Visual Studio 2026, and
+# each job builds in the developer shell of the one that has the MSVC it tests, with that Visual
+# Studio's CMake and Ninja. tools/install.cmake installs wasi-sdk and wasm-tools, which are cached
+# until a pin or the script changes. Windows minutes cost the most, so the Windows jobs start only
+# once every Linux job has passed, and on feature/* only once someone approves them too. The image
+# moves when the MSVC floor moves or a newer MSVC ships, and the versions each job checks move with
+# it.
 #
 # Each job builds its own generator and test scripts, and no files move between jobs, so every job
 # shows that the pinned wasi-sdk reproduces the scripts. There are no compile caches.
@@ -24,6 +34,11 @@ executors:
     docker:
       - image: ghcr.io/takumu-dev/stasis-ci-newest@sha256:ba11f90283cadc4c1479bfd5bfda5928abe6f924af430524f646da05f1803cab
     resource_class: medium
+  windows:
+    machine:
+      image: windows-server-2025-gui:2026.10.1
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
 
 jobs:
   preset:
@@ -39,6 +54,63 @@ jobs:
           name: cmake --workflow --preset << parameters.preset >>
           command: cmake --workflow --preset << parameters.preset >>
 
+  # A preset built with MSVC, in the developer shell of a Visual Studio whose cl, CMake and Ninja
+  # are checked first. Each step enters the shell anew through ci/msvc-shell.ps1.
+  msvc:
+    parameters:
+      visual-studio:
+        description: The year of the Visual Studio Build Tools whose MSVC builds the preset.
+        type: enum
+        enum: ["2022", "2026"]
+      cl:
+        description: The version cl reports.
+        type: string
+      cmake:
+        description: The version that Visual Studio's own CMake reports.
+        type: string
+      ninja:
+        description: The version that Visual Studio's own Ninja reports.
+        type: string
+      preset:
+        type: string
+    executor: windows
+    steps:
+      - checkout
+      - run:
+          name: Check cl, CMake and Ninja
+          command: >-
+            ci/msvc-shell.ps1 -VisualStudio << parameters.visual-studio >>
+            -Cl << parameters.cl >> -CMake << parameters.cmake >> -Ninja << parameters.ninja >>
+      - when:
+          condition:
+            equal: [msvc-asan, << parameters.preset >>]
+          steps:
+            - run:
+                name: Check the AddressSanitizer runtime
+                command: >-
+                  ci/msvc-shell.ps1 -VisualStudio << parameters.visual-studio >>
+                  -AddressSanitizer
+      - restore_cache:
+          key: &windows-tools
+            windows-tools-{{ checksum "tools/pins.json" }}-{{ checksum "tools/install.cmake" }}
+      - run:
+          name: Install wasi-sdk and wasm-tools
+          command: >-
+            ci/msvc-shell.ps1 -VisualStudio << parameters.visual-studio >> --
+            cmake "-DPREFIX=$HOME/stasis-tools" "-DTOOLS=wasi-sdk;wasm-tools"
+            -P tools/install.cmake
+      - save_cache:
+          key: *windows-tools
+          paths:
+            - ~/stasis-tools
+      - run:
+          name: cmake --workflow --preset << parameters.preset >>
+          command: |
+            $env:WASI_SDK_PATH = "$HOME\stasis-tools\wasi-sdk"
+            $env:PATH = "$HOME\stasis-tools\wasm-tools;$env:PATH"
+            ci/msvc-shell.ps1 -VisualStudio << parameters.visual-studio >> -- `
+                cmake --workflow --preset << parameters.preset >>
+
 workflows:
   ci:
     when: pipeline.git.branch matches /^(develop|feature\/.+|release\/.+|hotfix\/.+)$/
@@ -46,13 +118,44 @@ workflows:
       - preset:
           name: floor-<< matrix.preset >>
           matrix:
+            alias: linux-floor
             parameters:
               executor: [floor]
               preset: [gcc-debug, gcc-release, clang-debug, clang-release]
       - preset:
           name: newest-<< matrix.preset >>
           matrix:
+            alias: linux-newest
             parameters:
               executor: [newest]
               preset:
                 [gcc-debug, gcc-release, clang-debug, clang-release, sanitize, tsan, tidy, lint]
+
+      # Only feature/* has the approval. Elsewhere, the Windows jobs require Linux alone, since a
+      # job that a filter leaves out isn't required.
+      - approve-windows:
+          type: approval
+          filters: pipeline.git.branch matches /^feature\/.+$/
+          requires: [linux-floor, linux-newest]
+      # MSVC 14.44, the floor, from Visual Studio 2022 Build Tools 17.14.
+      - msvc:
+          name: floor-<< matrix.preset >>
+          visual-studio: "2022"
+          cl: 19.44.35229
+          cmake: 3.31.6-msvc6
+          ninja: 1.12.1
+          matrix:
+            parameters:
+              preset: [msvc-debug, msvc-release]
+          requires: [linux-floor, linux-newest, approve-windows]
+      # The newest MSVC, 14.51, from Visual Studio 2026 Build Tools 18.11.
+      - msvc:
+          name: newest-<< matrix.preset >>
+          visual-studio: "2026"
+          cl: 19.51.36260
+          cmake: 4.3.1-msvc1
+          ninja: 1.13.2
+          matrix:
+            parameters:
+              preset: [msvc-debug, msvc-release, msvc-asan]
+          requires: [linux-floor, linux-newest, approve-windows]

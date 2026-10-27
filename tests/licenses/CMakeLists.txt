@@ -224,7 +224,8 @@ stasis_add_license_test(fails_a_dependency_that_ships_without_notices
     FAILS_WITH "lua 5\\.4\\.8 ships, but names no licence files to go with it\\."
 )
 
-# Writing the notices gives the file written by hand.
+# Writing the notices gives the file written by hand. CMake's file(WRITE) ends lines in CRLF on
+# Windows, and the file written by hand is checked out with LF.
 set(written "${CMAKE_CURRENT_BINARY_DIR}/writes_notices_of_what_ships.md")
 stasis_add_license_test(writes_notices_of_what_ships
     MANIFEST "{\"dependencies\": [${gtest}, ${lz4}, ${zlib}]}"
@@ -234,7 +235,7 @@ set_tests_properties(licenses.writes_notices_of_what_ships PROPERTIES
     FIXTURES_SETUP license_notices_written
 )
 add_test(NAME licenses.writes_notices_of_what_ships_as_expected
-    COMMAND "${CMAKE_COMMAND}" -E compare_files
+    COMMAND "${CMAKE_COMMAND}" -E compare_files --ignore-eol
         "${written}" "${CMAKE_CURRENT_SOURCE_DIR}/notices/THIRD_PARTY_NOTICES.md"
 )
 set_tests_properties(licenses.writes_notices_of_what_ships_as_expected PROPERTIES
