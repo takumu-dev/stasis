@@ -135,7 +135,7 @@ target_sources(stasis
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
-        FILES include/stasis.h
+        FILES include/stasis.h include/stasis_interface.h
 )
 stasis_target_holds_wamr(stasis stasis_wamr)
 set_target_properties(stasis PROPERTIES DEFINE_SYMBOL STASIS_EXPORTS)
@@ -160,7 +160,8 @@ if(STASIS_INSTALL)
 endif()
 
 # The generator, stasis-gen, which reads interface files. A build that isn't cross-compiling defines
-# it, but a host's build makes it only when something needs it.
+# it, but a host's build makes it only when something needs it, such as a stasis_generate.
+include(StasisGenerate)
 if(NOT CMAKE_CROSSCOMPILING)
     if(PROJECT_IS_TOP_LEVEL)
         add_subdirectory(generator)

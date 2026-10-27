@@ -112,6 +112,8 @@ struct object {
     /* The group that declares it. */
     const struct group *group;
     struct function *methods;
+    /* Its place among every object of the interface, from 0. */
+    size_t index;
 };
 
 /* One name that a `use` brings in. */
@@ -198,6 +200,7 @@ struct interface {
     struct group *groups;
     size_t group_count;
     size_t record_count;
+    size_t object_count;
     /* Its kinds of script, of which a whole interface has exactly one. */
     struct script *scripts;
 };
