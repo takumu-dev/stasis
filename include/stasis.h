@@ -15,6 +15,9 @@
 #ifndef STASIS_H
 #define STASIS_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -146,6 +149,57 @@ typedef enum stasis_status {
  * never null.
  */
 STASIS_API const char *stasis_status_text(stasis_status status);
+
+/**
+ * @brief A script instance: one live copy of a script, with its own memory.
+ *
+ * It's opaque, and a host only ever holds a pointer to one.
+ */
+typedef struct stasis_instance stasis_instance;
+
+/**
+ * @brief A UTF-8 string, passed by value, which isn't NUL-terminated.
+ */
+typedef struct stasis_string {
+    /** The string's bytes. It may be null when the string is empty. */
+    const char *data;
+    /** The number of bytes in the string. */
+    size_t size;
+} stasis_string;
+
+/**
+ * @brief An interface's descriptors and thunks, which `stasis-gen host` writes as constant data.
+ *
+ * A host passes the generated data by address, and needs to know nothing of what it holds, which
+ * stasis_interface.h declares.
+ */
+typedef struct stasis_interface stasis_interface;
+
+/**
+ * @brief Calls one of a script instance's entry points.
+ *
+ * The typed callers that `stasis-gen host` writes each call it for one entry point, with the
+ * arguments and result in their own types.
+ *
+ * @param instance The script instance to call, which must be ready.
+ * @param interface_data The interface the instance's script was loaded against.
+ * @param entry_point The entry point's id, which is its index among the entry points of its kind
+ * of script. The host's side of an interface names each id with a constant, such as
+ * `ACME_DUNGEON_NPC_TICK_ENTRY`.
+ * @param arguments The entry point's arguments, in a struct laid out as its descriptor says, or
+ * null when it takes none.
+ * @param result Where the entry point's result goes, laid out as its descriptor says, or null when
+ * it returns nothing. It's zeroed when the call fails. The strings in a result, in records too,
+ * stay valid until the next call into the instance, or until the instance is destroyed.
+ * @return ::STASIS_OK once the entry point has returned. ::STASIS_TRAP when it trapped, and a
+ * refusal when the instance couldn't take the call: ::STASIS_REFUSED_NESTED,
+ * ::STASIS_REFUSED_TRAPPED, ::STASIS_REFUSED_NOT_STARTED, or ::STASIS_REFUSED_ABSENT for an
+ * optional entry point the script doesn't provide. ::STASIS_INVALID_ARGUMENT when an argument fails
+ * a check.
+ */
+STASIS_API stasis_status stasis_call(stasis_instance *instance,
+                                     const stasis_interface *interface_data, uint32_t entry_point,
+                                     const void *arguments, void *result);
 
 #ifdef __cplusplus
 }

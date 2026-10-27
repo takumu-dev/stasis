@@ -135,7 +135,7 @@ target_sources(stasis
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
-        FILES include/stasis.h
+        FILES include/stasis.h include/stasis_interface.h
 )
 stasis_target_holds_wamr(stasis stasis_wamr)
 set_target_properties(stasis PROPERTIES DEFINE_SYMBOL STASIS_EXPORTS)
