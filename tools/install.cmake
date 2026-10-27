@@ -23,6 +23,14 @@ cmake_path(ABSOLUTE_PATH prefix NORMALIZE)
 string(REGEX REPLACE "(.)/$" "\\1" prefix "${prefix}")
 
 cmake_host_system_information(RESULT host QUERY OS_NAME OS_PLATFORM)
+# On Windows, OS_PLATFORM is the PROCESSOR_ARCHITECTURE environment variable, which a 32-bit program
+# sets to x86 even on x86-64 Windows, and passes on to the programs it runs, this one included. It
+# keeps the real architecture in PROCESSOR_ARCHITEW6432, which CMake's own
+# CMAKE_HOST_SYSTEM_PROCESSOR prefers too.
+if(CMAKE_HOST_WIN32 AND DEFINED ENV{PROCESSOR_ARCHITEW6432})
+    list(GET host 0 system)
+    set(host "${system};$ENV{PROCESSOR_ARCHITEW6432}")
+endif()
 if(host MATCHES "^Linux;(x86_64|AMD64)$")
     set(platform linux-x86_64)
 elseif(host MATCHES "^Windows;(x86_64|AMD64)$")
