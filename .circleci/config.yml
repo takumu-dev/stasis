@@ -1,0 +1,58 @@
+# Builds and tests Stasis on every push to develop, feature/*, release/* and hotfix/*, and on
+# nothing else. The project's trigger starts a pipeline for every push to a branch, and the workflow
+# runs only for those. Nothing runs for pull requests, main, tags or a schedule: a pull request's
+# branch is built by its push, main only ever merges a tree its release or hotfix branch has tested,
+# and with every image pinned, a run on a schedule would test nothing new.
+#
+# Each job is one workflow preset, run in an image pinned to its digest, so CI holds no build logic
+# of its own, and any job runs on a developer's machine with one command, as the README shows.
+#
+# The images are built from ci/ and pushed by hand. stasis-ci-floor has each compiler at its floor,
+# in the Steam Runtime's SDK, and stasis-ci-newest has their newest releases and also runs the
+# sanitizers and the checks.
+#
+# Each job builds its own generator and test scripts, and no files move between jobs, so every job
+# shows that the pinned wasi-sdk reproduces the scripts. There are no compile caches.
+version: 2.1
+
+executors:
+  floor:
+    docker:
+      - image: ghcr.io/takumu-dev/stasis-ci-floor@sha256:5d14bf4625e94df7302cb284e3a8113cc3b15a9f2fbde0ca158588ec901d119e
+    resource_class: medium
+  newest:
+    docker:
+      - image: ghcr.io/takumu-dev/stasis-ci-newest@sha256:ba11f90283cadc4c1479bfd5bfda5928abe6f924af430524f646da05f1803cab
+    resource_class: medium
+
+jobs:
+  preset:
+    parameters:
+      executor:
+        type: executor
+      preset:
+        type: string
+    executor: << parameters.executor >>
+    steps:
+      - checkout
+      - run:
+          name: cmake --workflow --preset << parameters.preset >>
+          command: cmake --workflow --preset << parameters.preset >>
+
+workflows:
+  ci:
+    when: pipeline.git.branch matches /^(develop|feature\/.+|release\/.+|hotfix\/.+)$/
+    jobs:
+      - preset:
+          name: floor-<< matrix.preset >>
+          matrix:
+            parameters:
+              executor: [floor]
+              preset: [gcc-debug, gcc-release, clang-debug, clang-release]
+      - preset:
+          name: newest-<< matrix.preset >>
+          matrix:
+            parameters:
+              executor: [newest]
+              preset:
+                [gcc-debug, gcc-release, clang-debug, clang-release, sanitize, tsan, tidy, lint]
