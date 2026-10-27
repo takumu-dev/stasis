@@ -3,6 +3,7 @@
 #include "arena.h"
 #include "diagnostics.h"
 #include "interface.h"
+#include "text.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -29,17 +30,6 @@ static const char macros[] =
 /* The generator's own parameters, beside which a parameter of an interface's is declared, each
  * between spaces. */
 static const char own_parameters[] = " instance result self ";
-
-/* Whether `name` is one of the words in `words`, which are each between spaces. */
-static bool is_among(const char *name, const char *words) {
-    const size_t length = strlen(name);
-    for (const char *found = strstr(words, name); found != NULL; found = strstr(found + 1, name)) {
-        if (found[-1] == ' ' && found[length] == ' ') {
-            return true;
-        }
-    }
-    return false;
-}
 
 /* Whether `c` is a lowercase ASCII letter. */
 static bool is_lowercase(char c) {

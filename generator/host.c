@@ -12,9 +12,6 @@
 #include <stdint.h>
 #include <string.h>
 
-/* The column that generated lines stay within, where they can. */
-enum { LINE_LIMIT = 100 };
-
 /* The descriptor format that the generated data has, which is stasis_interface.h's
  * STASIS_INTERFACE_FORMAT. It's written as a number, so that the data names the format it was
  * generated in even when it's compiled against a later stasis_interface.h. */
@@ -47,44 +44,15 @@ struct writer {
     const struct group **groups;
 };
 
-/* A list of strings, such as the parameters of a function being declared. */
-struct strings {
-    const char **items;
-    size_t count;
-    size_t capacity;
-};
-
 /* Adds a string formatted as snprintf does to a list. */
 static void add_string(struct writer *writer, struct strings *strings, const char *format, ...)
     PRINTF_FORMAT(3, 4);
 
 static void add_string(struct writer *writer, struct strings *strings, const char *format, ...) {
-    strings->items =
-        (const char **)arena_grow(writer->arena, (void *)strings->items, strings->count,
-                                  &strings->capacity, sizeof *strings->items);
     va_list arguments;
     va_start(arguments, format);
-    strings->items[strings->count++] = arena_vformat(writer->arena, format, arguments);
+    strings_add(strings, writer->arena, arena_vformat(writer->arena, format, arguments));
     va_end(arguments);
-}
-
-/* The length of the strings in a list, joined by ", ". */
-static size_t joined_length(const struct strings *strings) {
-    size_t length = 0;
-    for (size_t i = 0; i < strings->count; i++) {
-        length += strlen(strings->items[i]) + (i > 0 ? 2 : 0);
-    }
-    return length;
-}
-
-/* Writes the strings in a list, joined by ", ". */
-static void write_joined(struct writer *writer, const struct strings *strings) {
-    for (size_t i = 0; i < strings->count; i++) {
-        if (i > 0) {
-            text_append(writer->out, ", ");
-        }
-        text_append(writer->out, strings->items[i]);
-    }
 }
 
 /* Writes a list, such as a call's arguments: `head`, the items separated by commas, and `tail`.
@@ -95,14 +63,14 @@ static void write_list(struct writer *writer, const char *indent, const char *he
     const size_t joined = joined_length(items);
     if (strlen(indent) + strlen(head) + joined + strlen(tail) <= LINE_LIMIT) {
         text_format(writer->out, "%s%s", indent, head);
-        write_joined(writer, items);
+        text_append_joined(writer->out, items);
         text_format(writer->out, "%s\n", tail);
         return;
     }
     text_format(writer->out, "%s%s\n", indent, head);
     if (strlen(indent) + 4 + joined + strlen(tail) <= LINE_LIMIT) {
         text_format(writer->out, "%s    ", indent);
-        write_joined(writer, items);
+        text_append_joined(writer->out, items);
         text_format(writer->out, "%s\n", tail);
         return;
     }
@@ -118,7 +86,7 @@ static void write_initialiser(struct writer *writer, const char *indent, const c
                               const struct strings *items, const char *tail) {
     if (strlen(indent) + strlen(head) + joined_length(items) + strlen(tail) + 2 <= LINE_LIMIT) {
         text_format(writer->out, "%s%s{", indent, head);
-        write_joined(writer, items);
+        text_append_joined(writer->out, items);
         text_format(writer->out, "}%s\n", tail);
         return;
     }
@@ -152,30 +120,6 @@ static const char *doc_line(struct writer *writer, const char *line) {
         }
     }
     return rendered.data;
-}
-
-/* Writes a paragraph of a doc comment at `indent`, filling each line up to the limit. */
-static void write_paragraph(struct writer *writer, const char *indent, const char *paragraph) {
-    const size_t start = strlen(indent) + 2;
-    size_t column = start;
-    text_format(writer->out, "%s *", indent);
-    const char *word = paragraph;
-    while (*word != '\0') {
-        const char *end = strchr(word, ' ');
-        const size_t length = end == NULL ? strlen(word) : (size_t)(end - word);
-        if (column > start && column + 1 + length > LINE_LIMIT) {
-            text_format(writer->out, "\n%s *", indent);
-            column = start;
-        }
-        text_append(writer->out, " ");
-        text_append_length(writer->out, word, length);
-        column += 1 + length;
-        word += length;
-        while (*word == ' ') {
-            word++;
-        }
-    }
-    text_append(writer->out, "\n");
 }
 
 /* Writes a doc comment at `indent`, of up to three parts, each of which may be left out: its first
@@ -224,7 +168,7 @@ static void write_doc(struct writer *writer, const char *indent, const char *fir
         if (separate) {
             text_format(writer->out, "%s *\n", indent);
         }
-        write_paragraph(writer, indent, paragraph);
+        text_fill(writer->out, arena_format(writer->arena, "%s *", indent), paragraph);
     }
     text_format(writer->out, "%s */\n", indent);
 }
