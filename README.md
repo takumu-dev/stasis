@@ -48,7 +48,7 @@ its version, and the URL and SHA-256 of its release for x86-64 Linux and for Win
 |---|---|---|
 | wasi-sdk | 34 | The tests build C scripts with its clang. Its clang-format and clang-tidy format and check Stasis's own code. |
 | wasm-tools | 1.262.0 | The tests build WAT modules with it, and validate scripts. |
-| LLVM | 23.1.4 | The newest Clang, to test Stasis with. |
+| LLVM | 23.1.4 | The newest Clang, to test Stasis with, and llvm-symbolizer, which names functions and lines in the sanitizers' reports. |
 | CMake | 4.4.4 | The newest CMake, to test Stasis with. |
 | Ninja | 1.13.2 | The presets. |
 | Doxygen | 1.18.0 | The API documentation. |
@@ -101,6 +101,32 @@ stops if either is missing or at another version:
 
 The `format` and `check-format` targets and the `tidy` preset use wasi-sdk's clang-format and
 clang-tidy too, never others, since each release of them formats and checks a little differently.
+
+## Continuous integration
+
+CircleCI builds and tests every push to `develop` and to the `feature/*`, `release/*` and
+`hotfix/*` branches. Each job is one workflow preset, run in a Docker image that
+`.circleci/config.yml` names by its digest:
+
+| Image | Compilers | Presets |
+|---|---|---|
+| `ghcr.io/takumu-dev/stasis-ci-floor` | GCC 10.3 and Clang 11.0.1, the floors | `gcc-debug`, `gcc-release`, `clang-debug` and `clang-release` |
+| `ghcr.io/takumu-dev/stasis-ci-newest` | GCC 16.2 and Clang 23.1.4, the newest releases | the same four, and `sanitize`, `tsan`, `tidy` and `lint` |
+
+`stasis-ci-floor` is the SDK of Valve's Steam Runtime 3, sniper, as Valve ships it, with the pinned
+wasi-sdk and wasm-tools. `stasis-ci-newest` is GCC's official image with every pinned tool, and
+its plain `gcc` and `clang` are the newest releases. Both install the tools with
+`tools/install.cmake`, and their Dockerfiles are under `ci/`.
+
+A job runs on any machine with Docker, with the image's digest from `.circleci/config.yml`:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src \
+    ghcr.io/takumu-dev/stasis-ci-newest@sha256:<digest> cmake --workflow --preset sanitize
+```
+
+The preset builds into `build/<preset>` as usual, and that tree then belongs to the image: remove it
+before building the preset outside the image, and the other way round.
 
 ## WAMR and other third-party code
 
