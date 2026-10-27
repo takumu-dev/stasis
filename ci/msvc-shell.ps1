@@ -42,6 +42,7 @@ $vs = $installations[0]
 
 Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -Arch amd64 -HostArch amd64
+Write-Host "msvc-shell: Visual Studio $VisualStudio Build Tools is at $vs, with MSVC $env:VCToolsVersion"
 
 # The developer shell puts Visual Studio's CMake and Ninja last on the PATH, after any others.
 $cmakeTools = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake'
@@ -69,14 +70,22 @@ function Test-Version([string] $program, [string] $version, [string[]] $argument
         return
     }
     # Windows PowerShell turns each line a program writes to stderr into an error, which would stop
-    # the script, and cl writes its version there.
+    # the script, and cl writes its version there. The error holds the line.
     $ErrorActionPreference = 'Continue'
-    $output = (& $found.Source @arguments 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $lines = & $found.Source @arguments 2>&1 | ForEach-Object {
+        if ($_ -is [Management.Automation.ErrorRecord] -and $_.TargetObject -is [string]) {
+            $_.TargetObject
+        } else {
+            "$_"
+        }
+    }
+    $output = $lines -join "`n"
     $pattern = '(^|[^0-9.])' + [regex]::Escape($version) + '([^0-9.]|$)'
     if ($output -match $pattern) {
         Write-Host "msvc-shell: $program is $version, at $($found.Source)"
     } else {
-        Write-Broken "$program isn't ${version}: ``$program $arguments`` printed: $output"
+        $invocation = (@($program) + $arguments) -join ' '
+        Write-Broken "$program isn't ${version}: ``$invocation`` printed: $output"
     }
 }
 
@@ -108,7 +117,7 @@ if ($AddressSanitizer) {
     Test-Listed clang_rt.asan_dynamic-x86_64.lib LIB
 }
 if ($broken -ne 0) {
-    throw "The developer shell of Visual Studio $VisualStudio breaks $broken promises."
+    throw "msvc-shell: promises broken: $broken"
 }
 
 if ($Command) {

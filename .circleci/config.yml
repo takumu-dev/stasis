@@ -135,20 +135,20 @@ workflows:
       - msvc:
           name: floor-<< matrix.preset >>
           visual-studio: "2022"
-          cl: 19.44.35221
+          cl: 19.44.35229
           cmake: 3.31.6-msvc6
           ninja: 1.12.1
           matrix:
             parameters:
               preset: [msvc-debug, msvc-release]
           requires: [linux-floor, linux-newest, approve-windows]
-      # The newest MSVC, from Visual Studio 2026 Build Tools 18.10.
+      # The newest MSVC, 14.51, from Visual Studio 2026 Build Tools 18.11.
       - msvc:
           name: newest-<< matrix.preset >>
           visual-studio: "2026"
-          cl: 19.51.0
-          cmake: 4.1.1-msvc1
-          ninja: 1.12.1
+          cl: 19.51.36260
+          cmake: 4.3.1-msvc1
+          ninja: 1.13.2
           matrix:
             parameters:
               preset: [msvc-debug, msvc-release, msvc-asan]
