@@ -106,7 +106,7 @@ clang-tidy too, never others, since each release of them formats and checks a li
 ## Continuous integration
 
 CircleCI builds and tests every push to `develop` and to the `feature/*`, `release/*` and
-`hotfix/*` branches. Each job is one workflow preset, run in a Docker image that
+`hotfix/*` branches. Each job is one workflow preset. On Linux, it runs in a Docker image that
 `.circleci/config.yml` names by its digest:
 
 | Image | Compilers | Presets |
@@ -128,6 +128,21 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src \
 
 The preset builds into `build/<preset>` as usual, and that tree then belongs to the image: remove it
 before building the preset outside the image, and the other way round.
+
+On Windows, the jobs run on CircleCI's own image, `windows-server-2025-gui:2026.10.1`, which has
+both Visual Studios:
+
+| Visual Studio | MSVC | Presets |
+|---|---|---|
+| Visual Studio 2022 Build Tools 17.14 | 14.44, the floor | `msvc-debug` and `msvc-release` |
+| Visual Studio 2026 Build Tools 18.11 | 14.51, the newest release | the same two, and `msvc-asan` |
+
+`ci/msvc-shell.ps1` runs each job's preset in the developer shell of its Visual Studio, with that
+Visual Studio's CMake and Ninja, once it has checked that cl, CMake and Ninja are at the versions
+`.circleci/config.yml` gives. The job installs wasi-sdk and wasm-tools with `tools/install.cmake`.
+Windows minutes cost the most, so the Windows jobs start only once every Linux job has passed, and on
+a `feature/*` branch only once someone approves them in the workflow too. On a developer's machine,
+the same preset runs from a developer command prompt for the same MSVC.
 
 ## WAMR and other third-party code
 
