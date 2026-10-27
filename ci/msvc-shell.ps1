@@ -1,15 +1,15 @@
 # Runs a command in the developer shell of the Visual Studio whose MSVC a CI job builds with, as a
-# developer command prompt for MSVC would, with that Visual Studio's own CMake and Ninja first on the
-# PATH:
+# developer command prompt for MSVC would, with that Visual Studio's own CMake and Ninja first on
+# the PATH:
 #
 #   ci/msvc-shell.ps1 -VisualStudio <2022|2026> [-Cl <version> -CMake <version> -Ninja <version>]
 #       [-AddressSanitizer] [-- <command> [<argument>...]]
 #
-# The Visual Studio is the Build Tools of the year given, which CircleCI's Windows image has for both
-# years. Given versions, the script first checks that cl, CMake and Ninja are Visual Studio's own and
-# report those versions. With -AddressSanitizer, it checks that the shell has MSVC's AddressSanitizer
-# runtime too, which msvc-asan links and runs with. It reports every promise the shell breaks rather
-# than just the first, and runs the command only if none is broken.
+# The Visual Studio is the Build Tools of the year given, which CircleCI's Windows image has for
+# both years. Given versions, the script first checks that cl, CMake and Ninja are Visual Studio's
+# own and report those versions. With -AddressSanitizer, it checks that the shell has MSVC's
+# AddressSanitizer runtime too, which msvc-asan links and runs with. It reports every promise the
+# shell breaks rather than just the first, and runs the command only if none is broken.
 #
 # A step of a CircleCI job runs in a PowerShell of its own, so each step that needs the shell enters
 # it again through this script. The script fails if anything does, the command included.
@@ -35,14 +35,15 @@ $installations = @(
         -version "[$major.0,$($major + 1).0)" -property installationPath
 )
 if ($installations.Count -ne 1) {
-    throw "Visual Studio $VisualStudio Build Tools should be installed once, but vswhere found " +
-        "$($installations.Count) installations: $($installations -join ', ')"
+    throw "msvc-shell: Visual Studio $VisualStudio Build Tools should be installed once, but " +
+        "vswhere found $($installations.Count) installations: $($installations -join ', ')"
 }
 $vs = $installations[0]
 
 Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -Arch amd64 -HostArch amd64
-Write-Host "msvc-shell: Visual Studio $VisualStudio Build Tools is at $vs, with MSVC $env:VCToolsVersion"
+Write-Host ("msvc-shell: Visual Studio $VisualStudio Build Tools is at $vs, with MSVC " +
+    $env:VCToolsVersion)
 
 # The developer shell puts Visual Studio's CMake and Ninja last on the PATH, after any others.
 $cmakeTools = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake'
@@ -91,7 +92,7 @@ function Test-Version([string] $program, [string] $version, [string[]] $argument
 
 # Checks that the file `name` is in one of the directories that the environment variable
 # `variable` lists.
-function Test-Listed([string] $name, [string] $variable) {
+function Test-OnSearchPath([string] $name, [string] $variable) {
     $directories = [Environment]::GetEnvironmentVariable($variable) -split ';' | Where-Object { $_ }
     $found = $directories | ForEach-Object { "$_\$name" } |
         Where-Object { [IO.File]::Exists($_) } | Select-Object -First 1
@@ -113,8 +114,8 @@ if ($Ninja) {
 }
 # The runtime is a DLL that each program loads, through an import library it links.
 if ($AddressSanitizer) {
-    Test-Listed clang_rt.asan_dynamic-x86_64.dll PATH
-    Test-Listed clang_rt.asan_dynamic-x86_64.lib LIB
+    Test-OnSearchPath clang_rt.asan_dynamic-x86_64.dll PATH
+    Test-OnSearchPath clang_rt.asan_dynamic-x86_64.lib LIB
 }
 if ($broken -ne 0) {
     throw "msvc-shell: promises broken: $broken"
@@ -127,6 +128,6 @@ if ($Command) {
     $ErrorActionPreference = 'Continue'
     & $program @arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "``$($Command -join ' ')`` failed with exit code $LASTEXITCODE."
+        throw "msvc-shell: ``$($Command -join ' ')`` failed with exit code $LASTEXITCODE"
     }
 }

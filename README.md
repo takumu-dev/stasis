@@ -140,9 +140,9 @@ both Visual Studios:
 `ci/msvc-shell.ps1` runs each job's preset in the developer shell of its Visual Studio, with that
 Visual Studio's CMake and Ninja, once it has checked that cl, CMake and Ninja are at the versions
 `.circleci/config.yml` gives. The job installs wasi-sdk and wasm-tools with `tools/install.cmake`.
-Windows minutes cost the most, so the Windows jobs start only once every Linux job has passed, and on
-a `feature/*` branch only once someone approves them in the workflow too. On a developer's machine,
-the same preset runs from a developer command prompt for the same MSVC.
+Windows minutes cost the most, so the Windows jobs start only once every Linux job has passed, and
+on a `feature/*` branch only once someone approves them in the workflow too. On a developer's
+machine, the same preset runs from a developer command prompt for the same MSVC.
 
 ## WAMR and other third-party code
 
