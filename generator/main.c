@@ -1,5 +1,5 @@
 /* stasis-gen, Stasis's generator: it reads an interface file and checks it, prints what a host
- * developer needs from it, or writes the host's side of it.
+ * developer needs from it, or writes the host's side of it or its WIT rendering.
  *
  * It exits with 0 when it did what it was asked, 1 when the interface has errors, and 2 when it
  * couldn't run: for a bad command line, a file it can't read or write, or a lack of memory. It
@@ -12,6 +12,7 @@
 #include "host.h"
 #include "interface.h"
 #include "signatures.h"
+#include "wit.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -35,8 +36,10 @@ static const char usage[] =
     "  host        write the host's side of the interface, as a C header and source\n"
     "  signatures  print the signature encoding and hash of each host function, method and entry\n"
     "              point\n"
+    "  wit         write the interface's WIT rendering\n"
     "options of host:\n"
     "  --prefix <prefix>         start every C name with <prefix>, not <namespace>_<name>_\n"
+    "options of host and wit:\n"
     "  --output-directory <dir>  write into <dir>, not the current directory\n";
 
 /* What a command is given besides its interface file. */
@@ -136,6 +139,14 @@ static int host(const struct interface *interface, const struct options *options
     return write_files(files, HOST_FILE_COUNT, options, arena);
 }
 
+/* Writes the interface's WIT rendering. */
+static int wit(const struct interface *interface, const struct options *options,
+               struct arena *arena) {
+    struct output_file file;
+    generate_wit(interface, base_name(options->path), arena, &file);
+    return write_files(&file, 1, options, arena);
+}
+
 /* The commands, by name, with the options each takes. */
 static const struct {
     const char *name;
@@ -146,6 +157,7 @@ static const struct {
     {"check", check, false, false},
     {"host", host, true, true},
     {"signatures", signatures, false, false},
+    {"wit", wit, false, true},
 };
 
 /* Runs `command` on the interface file that `options` names. */
@@ -165,6 +177,7 @@ static int run(command_function *command, struct options *options) {
         options->prefix = default_prefix(interface, &arena);
     }
     check_c_names(interface, options->prefix, &arena, &diagnostics);
+    check_wit_names(interface, &arena, &diagnostics);
     int status = EXIT_ERRORS;
     if (diagnostics.count == 0) {
         status = command(interface, options, &arena);

@@ -7,12 +7,17 @@
 #   generator.host.<name>        host writes exactly the files in host/<name>/, the golden host
 #                                side of valid/<name>.stasis, or for crlf_prefixed, of crlf.stasis
 #                                with a prefix of its own
+#   generator.wit.<name>         wit writes exactly the file in wit/<name>/, the golden WIT
+#                                rendering of valid/<name>.stasis
+#   generator.wasm_tools_reads_wit.<name>
+#                                wasm-tools reads the golden WIT rendering wit/<name>/ as a WIT
+#                                package, and encodes and validates it
 #   generator.<what it does>     the command line itself
 #   generator.stasis_generate.*  the CMake function that runs stasis-gen in a build: in this build,
 #                                and in a host's build that names its own stasis-gen
 #
-# The golden host sides are rewritten on purpose, by building the target rewrite-generator-goldens,
-# and never by a test.
+# The golden host sides and WIT renderings are rewritten on purpose, by building the target
+# rewrite-generator-goldens, and never by a test.
 #
 # The build compiles each golden host side as a host's compiler sees it: its header on its own as
 # C99, as C++11 and as the newest C++, and its source as C99, all pedantic and with Stasis's own
@@ -54,8 +59,10 @@ set(usage
     [[  host        write the host's side of the interface, as a C header and source]]
     [[  signatures  print the signature encoding and hash of each host function, method and entry]]
     [[              point]]
+    [[  wit         write the interface's WIT rendering]]
     [[options of host:]]
     [[  --prefix <prefix>         start every C name with <prefix>, not <namespace>_<name>_]]
+    [[options of host and wit:]]
     [[  --output-directory <dir>  write into <dir>, not the current directory]]
 )
 
@@ -110,8 +117,8 @@ function(stasis_add_generator_output_check name)
     )
 endfunction()
 
-# Like check, signatures prints only the diagnostics of an interface with errors, and host prints
-# them and writes nothing. Every command reports C names that clash.
+# Like check, signatures prints only the diagnostics of an interface with errors, and host and wit
+# print them and write nothing. Every command reports C names and WIT names that clash.
 stasis_add_generator_output_check(signatures_prints_nothing_for_an_invalid_interface
     DIRECTORY invalid
     ARGS signatures no_script.stasis
@@ -124,16 +131,29 @@ stasis_add_generator_output_check(signatures_reports_c_name_clashes
     EXIT_CODE 1
     DIAGNOSTICS "${CMAKE_CURRENT_SOURCE_DIR}/invalid/c_name_clashes.stasis"
 )
+stasis_add_generator_output_check(signatures_reports_wit_name_clashes
+    DIRECTORY invalid
+    ARGS signatures wit_name_clashes.stasis
+    EXIT_CODE 1
+    DIAGNOSTICS "${CMAKE_CURRENT_SOURCE_DIR}/invalid/wit_name_clashes.stasis"
+)
 set(nothing_written "${CMAKE_CURRENT_BINARY_DIR}/nothing_written")
 stasis_add_generator_output_check(host_writes_nothing_for_an_invalid_interface
     DIRECTORY invalid
-    ARGS host --output-directory "${nothing_written}" c_name_clashes.stasis
+    ARGS host --output-directory "${nothing_written}/host" c_name_clashes.stasis
     EXIT_CODE 1
     DIAGNOSTICS "${CMAKE_CURRENT_SOURCE_DIR}/invalid/c_name_clashes.stasis"
-    EMPTY_DIRECTORY "${nothing_written}"
+    EMPTY_DIRECTORY "${nothing_written}/host"
+)
+stasis_add_generator_output_check(wit_writes_nothing_for_an_invalid_interface
+    DIRECTORY invalid
+    ARGS wit --output-directory "${nothing_written}/wit" wit_name_clashes.stasis
+    EXIT_CODE 1
+    DIAGNOSTICS "${CMAKE_CURRENT_SOURCE_DIR}/invalid/wit_name_clashes.stasis"
+    EMPTY_DIRECTORY "${nothing_written}/wit"
 )
 
-# host's options, and the files it writes.
+# host's and wit's options, and the files they write.
 stasis_add_generator_check(host_refuses_a_prefix_with_capitals ARGS host --prefix Acme_ crlf.stasis
     EXIT_CODE 2
     LINES "stasis-gen: the prefix `Acme_` isn't lowercase snake_case with a `_` after its last word"
@@ -155,6 +175,9 @@ stasis_add_generator_check(host_refuses_a_reserved_prefix
 stasis_add_generator_check(check_takes_no_prefix ARGS check --prefix acme_ crlf.stasis EXIT_CODE 2
     LINES "stasis-gen: `check` takes no `--prefix`" ${usage}
 )
+stasis_add_generator_check(wit_takes_no_prefix ARGS wit --prefix acme_ crlf.stasis EXIT_CODE 2
+    LINES "stasis-gen: `wit` takes no `--prefix`" ${usage}
+)
 stasis_add_generator_check(refuses_an_unknown_option ARGS host --frobnicate crlf.stasis
     EXIT_CODE 2
     LINES "stasis-gen: there's no option `--frobnicate`" ${usage}
@@ -174,13 +197,21 @@ stasis_add_generator_check(host_refuses_a_directory_it_cant_write
     EXIT_CODE 2
     LINES "stasis-gen: can't write missing/test_crlf\\.h: .+"
 )
-add_test(NAME generator.host_rewrites_only_changed_files
-    COMMAND "${CMAKE_COMMAND}"
-        "-DGENERATOR=${generator}"
-        "-DINTERFACE=${CMAKE_CURRENT_SOURCE_DIR}/valid/crlf.stasis"
-        "-DOUTPUT_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/rewrites"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/expect_rewrites.cmake"
+stasis_add_generator_check(wit_refuses_a_directory_it_cant_write
+    ARGS wit --output-directory missing crlf.stasis
+    EXIT_CODE 2
+    LINES "stasis-gen: can't write missing/test-crlf\\.wit: .+"
 )
+foreach(command IN ITEMS host wit)
+    add_test(NAME generator.${command}_rewrites_only_changed_files
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGENERATOR=${generator}"
+            "-DCOMMAND=${command}"
+            "-DINTERFACE=${CMAKE_CURRENT_SOURCE_DIR}/valid/crlf.stasis"
+            "-DOUTPUT_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/rewrites/${command}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/expect_rewrites.cmake"
+    )
+endforeach()
 
 file(GLOB valid_interfaces CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/valid/*.stasis")
 foreach(interface IN LISTS valid_interfaces)
@@ -212,16 +243,16 @@ foreach(interface IN LISTS invalid_interfaces)
     )
 endforeach()
 
-# Adds generator.host.<name>, which checks that host writes exactly the files of the golden host
-# side host/<name>/ for `interface`, with the options that follow it, and adds the commands that
-# rewrite that golden host side to rewrite-generator-goldens.
+# Adds generator.<command>.<name>, which checks that `command`, host or wit, writes exactly the files
+# of the golden directory <command>/<name>/ for `interface`, with the options that follow it, and
+# adds the commands that rewrite that golden directory to rewrite-generator-goldens.
 set(rewrite_commands "")
-function(stasis_add_host_golden name interface)
-    set(output "${CMAKE_CURRENT_BINARY_DIR}/host/${name}")
-    set(golden "${CMAKE_CURRENT_SOURCE_DIR}/host/${name}")
-    add_test(NAME generator.host.${name}
+function(stasis_add_golden command name interface)
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/${command}/${name}")
+    set(golden "${CMAKE_CURRENT_SOURCE_DIR}/${command}/${name}")
+    add_test(NAME generator.${command}.${name}
         COMMAND "${CMAKE_COMMAND}"
-            "-DCOMMAND=${generator};host;${ARGN};--output-directory;${output};${interface}"
+            "-DCOMMAND=${generator};${command};${ARGN};--output-directory;${output};${interface}"
             "-DWORKING_DIRECTORY=${CMAKE_CURRENT_SOURCE_DIR}/valid"
             "-DOUTPUT_DIRECTORY=${output}"
             "-DEXPECTED=${golden}"
@@ -230,7 +261,7 @@ function(stasis_add_host_golden name interface)
     list(APPEND rewrite_commands
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${golden}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${golden}"
-        COMMAND "${generator}" host ${ARGN} --output-directory "${golden}" "${interface}"
+        COMMAND "${generator}" ${command} ${ARGN} --output-directory "${golden}" "${interface}"
     )
     set(rewrite_commands "${rewrite_commands}" PARENT_SCOPE)
 endfunction()
@@ -238,14 +269,15 @@ endfunction()
 foreach(interface IN LISTS valid_interfaces)
     cmake_path(GET interface FILENAME file)
     cmake_path(GET interface STEM name)
-    stasis_add_host_golden(${name} ${file})
+    stasis_add_golden(host ${name} ${file})
+    stasis_add_golden(wit ${name} ${file})
 endforeach()
-stasis_add_host_golden(crlf_prefixed crlf.stasis --prefix my_crlf_)
+stasis_add_golden(host crlf_prefixed crlf.stasis --prefix my_crlf_)
 
 add_custom_target(rewrite-generator-goldens
     ${rewrite_commands}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/valid"
-    COMMENT "Rewriting the generator's golden host sides from what stasis-gen writes now"
+    COMMENT "Rewriting the generator's golden files from what stasis-gen writes now"
     VERBATIM
 )
 add_dependencies(rewrite-generator-goldens stasis_generator)
@@ -253,6 +285,18 @@ add_dependencies(rewrite-generator-goldens stasis_generator)
 file(GLOB golden_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/host/*/*.h")
 foreach(header IN LISTS golden_headers)
     stasis_add_header_checks("${header}")
+endforeach()
+
+# wasm-tools reads each golden WIT rendering as a WIT package, and encodes and validates it.
+file(GLOB golden_wit CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/wit/*/*.wit")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/wit_packages")
+foreach(file IN LISTS golden_wit)
+    cmake_path(GET file PARENT_PATH directory)
+    cmake_path(GET directory FILENAME name)
+    add_test(NAME generator.wasm_tools_reads_wit.${name}
+        COMMAND "${STASIS_WASM_TOOLS}" component wit --wasm
+            -o "${CMAKE_CURRENT_BINARY_DIR}/wit_packages/${name}.wasm" "${file}"
+    )
 endforeach()
 
 file(GLOB golden_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/host/*/*.c")
@@ -265,19 +309,23 @@ set(escaping "${CMAKE_CURRENT_SOURCE_DIR}/host/escaping")
 stasis_add_compile_check(stasis_host_macro_check_c escaping_macros.c C 99 "${escaping}")
 stasis_add_compile_check(stasis_host_macro_check_cxx escaping_macros.cpp CXX 11 "${escaping}")
 
-# This build generates the host side of the sample dungeon interface with stasis_generate, compiles
-# it, and checks it against its golden host side.
+# This build generates the host side and the WIT rendering of the sample dungeon interface with
+# stasis_generate, compiles the host side, and checks both against their golden files.
 stasis_generate(host valid/dungeon.stasis OUTPUT_DIRECTORY generated VARIABLE dungeon_host)
+stasis_generate(wit valid/dungeon.stasis OUTPUT_DIRECTORY generated VARIABLE dungeon_wit)
 list(GET dungeon_host 1 dungeon_source)
 stasis_add_compile_check(stasis_generated_host_side "${dungeon_source}" C 99
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
-foreach(file IN LISTS dungeon_host)
-    cmake_path(GET file FILENAME name)
-    add_test(NAME generator.stasis_generate.writes_${name}
-        COMMAND "${CMAKE_COMMAND}" -E compare_files
-            "${file}" "${CMAKE_CURRENT_SOURCE_DIR}/host/dungeon/${name}"
-    )
+add_custom_target(stasis_generated_wit ALL DEPENDS ${dungeon_wit})
+foreach(command IN ITEMS host wit)
+    foreach(file IN LISTS dungeon_${command})
+        cmake_path(GET file FILENAME name)
+        add_test(NAME generator.stasis_generate.writes_${name}
+            COMMAND "${CMAKE_COMMAND}" -E compare_files
+                "${file}" "${CMAKE_CURRENT_SOURCE_DIR}/${command}/dungeon/${name}"
+        )
+    endforeach()
 endforeach()
 
 # A host's build that doesn't build Stasis, configured and built by each test.
