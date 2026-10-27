@@ -2,12 +2,19 @@
 # and everything it wrote to stderr.
 #
 #   cmake -DCOMMAND=<program;argument;...> -DWORKING_DIRECTORY=<directory> -DEXIT_CODE=<status>
-#         [-DSTDOUT=<file>] [-DDIAGNOSTICS=<file>] -P expect_output.cmake
+#         [-DSTDOUT=<file>] [-DDIAGNOSTICS=<file>] [-DEMPTY_DIRECTORY=<directory>]
+#         -P expect_output.cmake
 #
 # stdout must be exactly STDOUT's contents, and stderr exactly the lines of DIAGNOSTICS that start
 # with "//! ", without that prefix. Either one left out means the command writes nothing there.
+# EMPTY_DIRECTORY, if given, is emptied first, and the command must leave it empty.
 
 cmake_minimum_required(VERSION 3.25...4.4)
+
+if(DEFINED EMPTY_DIRECTORY)
+    file(REMOVE_RECURSE "${EMPTY_DIRECTORY}")
+    file(MAKE_DIRECTORY "${EMPTY_DIRECTORY}")
+endif()
 
 execute_process(
     COMMAND ${COMMAND}
@@ -62,6 +69,13 @@ if(NOT "${stderr}" STREQUAL "${expected_stderr}")
     string(APPEND problems
         "\nIts stderr was:\n${stderr}\nwhere it should have been:\n${expected_stderr}"
     )
+endif()
+
+if(DEFINED EMPTY_DIRECTORY)
+    file(GLOB written RELATIVE "${EMPTY_DIRECTORY}" "${EMPTY_DIRECTORY}/*")
+    if(written)
+        string(APPEND problems "\nIt wrote ${written}, where it should have written nothing.")
+    endif()
 endif()
 
 if(problems)

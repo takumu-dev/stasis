@@ -510,6 +510,7 @@ static void parse_object(struct parser *parser, struct group *group) {
         return;
     }
     object->group = group;
+    object->index = parser->interface->object_count++;
     add_item(parser, ITEM_OBJECT)->as.object = object;
     if (!expect(parser, TOKEN_LEFT_BRACE)) {
         skip_declaration(parser);

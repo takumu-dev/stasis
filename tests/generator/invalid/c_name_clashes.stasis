@@ -1,0 +1,67 @@
+interface test:clashes@1.0.0;
+
+group world {
+    object entity {
+        fn find();
+    }
+    fn entity_find();
+    record entity_name { x: u8 }
+    object entity_two {}
+    fn twice();
+    fn twice();
+}
+
+group world_entity {
+    fn name();
+    record two { x: u8 }
+    fn find();
+}
+
+group npc_tick {
+    fn now();
+}
+
+group helpers {
+    record label { text: string }
+    record wrapped { inner: label }
+    record plain { x: u8 }
+    fn label_free();
+    fn wrapped_free();
+    fn plain_free();
+}
+
+group types {
+    record sizes { uint8_t: u8, stasis_string: u8 }
+    fn sized(uint32_t: u32, test_clashes_world_entity: u8);
+}
+
+script npc {
+    uses world, types;
+    fn tick_now();
+    fn run(stasis_call: u32, int64_t: s64);
+}
+
+
+//! c_name_clashes.stasis:7:8: error: host function `world.entity_find` and method `world.entity.find` both come out in C as `test_clashes_world_entity_find`
+//! c_name_clashes.stasis:5:12: note: method `world.entity.find` is here
+//! c_name_clashes.stasis:11:8: error: duplicate name `twice` in group `world`
+//! c_name_clashes.stasis:10:8: note: the first `twice` is here
+//! c_name_clashes.stasis:15:8: error: host function `world_entity.name` and record `world.entity_name` both come out in C as `test_clashes_world_entity_name`
+//! c_name_clashes.stasis:8:12: note: record `world.entity_name` is here
+//! c_name_clashes.stasis:16:12: error: record `world_entity.two` and kind of host object `world.entity_two` both come out in C as `test_clashes_world_entity_two`
+//! c_name_clashes.stasis:9:12: note: kind of host object `world.entity_two` is here
+//! c_name_clashes.stasis:17:8: error: host function `world_entity.find` and method `world.entity.find` both come out in C as `test_clashes_world_entity_find`
+//! c_name_clashes.stasis:5:12: note: method `world.entity.find` is here
+//! c_name_clashes.stasis:28:8: error: host function `helpers.label_free` and the `_free` helper of record `helpers.label` both come out in C as `test_clashes_helpers_label_free`
+//! c_name_clashes.stasis:25:12: note: the `_free` helper of record `helpers.label` is here
+//! c_name_clashes.stasis:29:8: error: host function `helpers.wrapped_free` and the `_free` helper of record `helpers.wrapped` both come out in C as `test_clashes_helpers_wrapped_free`
+//! c_name_clashes.stasis:26:12: note: the `_free` helper of record `helpers.wrapped` is here
+//! c_name_clashes.stasis:34:20: error: field `uint8_t` of record `types.sizes` comes out in C as `uint8_t`, a name the host's side uses already
+//! c_name_clashes.stasis:34:33: error: field `stasis_string` of record `types.sizes` comes out in C as `stasis_string`, a name the host's side uses already
+//! c_name_clashes.stasis:35:14: error: parameter `uint32_t` of host function `types.sized` comes out in C as `uint32_t`, a name the host's side uses already
+//! c_name_clashes.stasis:35:29: error: parameter `test_clashes_world_entity` of host function `types.sized` and kind of host object `world.entity` both come out in C as `test_clashes_world_entity`
+//! c_name_clashes.stasis:4:12: note: kind of host object `world.entity` is here
+//! c_name_clashes.stasis:40:8: error: entry point `npc.tick_now` and host function `npc_tick.now` both come out in C as `test_clashes_npc_tick_now`
+//! c_name_clashes.stasis:21:8: note: host function `npc_tick.now` is here
+//! c_name_clashes.stasis:41:12: error: parameter `stasis_call` of entry point `npc.run` comes out in C as `stasis_call`, a name the host's side uses already
+//! c_name_clashes.stasis:41:30: error: parameter `int64_t` of entry point `npc.run` comes out in C as `int64_t`, a name the host's side uses already

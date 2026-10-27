@@ -12,6 +12,11 @@ include(StasisWamrFiles)
 
 set(STASIS_WAMR_DIR "${PROJECT_SOURCE_DIR}/third_party/wamr")
 
+# The stack guard, in bytes: how near the end of the native stack a call may come before WAMR traps.
+# It's room for WAMR's own trap path, and the stack a host function is sure of when a script calls
+# it, which the generator's documentation of each host function states.
+set(STASIS_WAMR_STACK_GUARD_SIZE 16384)
+
 # WAMR calls host functions through assembly of its own: GNU assembly on Linux and MASM on Windows.
 # On Linux it also calls the maths library and threads, which older C libraries keep apart from the
 # rest.
@@ -141,7 +146,7 @@ function(stasis_add_wamr target)
         WASM_DISABLE_HW_BOUND_CHECK=1
         WASM_DISABLE_STACK_HW_BOUND_CHECK=1
         WASM_CONFIGURABLE_BOUNDS_CHECKS=0
-        WASM_STACK_GUARD_SIZE=16384
+        WASM_STACK_GUARD_SIZE=${STASIS_WAMR_STACK_GUARD_SIZE}
         # Nothing else of the host's process is touched either: the GS register, which the
         # interpreter would set on Linux, Winsock, and the signal that wakes blocking operations.
         WASM_DISABLE_WRITE_GS_BASE=1

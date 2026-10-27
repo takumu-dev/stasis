@@ -1,0 +1,45 @@
+/// Parameters and fields named as C, C++ or common headers name something already.
+interface test:escaping@1.0.0;
+
+group words {
+    /// Fields named after keywords, alternative tokens and common macros, and one that isn't.
+    record named {
+        int: s32,
+        class: u8,
+        new: u8,
+        this: u8,
+        and: bool,
+        xor_eq: bool,
+        co_await: u8,
+        char8_t: u8,
+        typeof_unqual: u8,
+        contract_assert: u8,
+        true: bool,
+        errno: s32,
+        small: u8,
+        near: u8,
+        far: u8,
+        linux: u8,
+        unix: u8,
+        stdin: u8,
+        stdout: u8,
+        stderr: u8,
+        instance: u8,
+        self: u8,
+        not_a_keyword: u8,
+    }
+
+    /// A doc comment can hold what would start or end a C comment, /* and */, and the generator
+    /// breaks each up.
+    object thing {
+        fn rename(namespace: string, template: u8, self: u8) -> string;
+    }
+
+    fn make(int: s32, false: bool, instance: thing, delete: u8) -> named;
+}
+
+script user {
+    uses words;
+
+    fn run(this: thing, self: named, register: u64, static_assert: bool) -> named;
+}
