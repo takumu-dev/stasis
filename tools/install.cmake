@@ -119,12 +119,16 @@ stasis_tool_files(wasm-tools windows-x86_64
 
 # LLVM's own release is the newest Clang: clang and clang++, and the resource directory with the
 # sanitizer runtimes and libFuzzer. It links with the system's linker. The archives hold no licence.
+#
+# On Linux, the sanitizers' reports name functions and lines through llvm-symbolizer. The system's
+# addr2line, their fallback, can't read the line tables Clang writes.
 stasis_tool_files(llvm linux-x86_64
     TOP LLVM-23.1.4-Linux-X64
     FILES
         bin/clang
         bin/clang++
         bin/clang-23
+        bin/llvm-symbolizer
         lib/clang/23/include
         lib/clang/23/lib/x86_64-unknown-linux-gnu
         lib/clang/23/share

@@ -48,7 +48,7 @@ its version, and the URL and SHA-256 of its release for x86-64 Linux and for Win
 |---|---|---|
 | wasi-sdk | 34 | The tests build C scripts with its clang. Its clang-format and clang-tidy format and check Stasis's own code. |
 | wasm-tools | 1.262.0 | The tests build WAT modules with it, and validate scripts. |
-| LLVM | 23.1.4 | The newest Clang, to test Stasis with. |
+| LLVM | 23.1.4 | The newest Clang, to test Stasis with, and llvm-symbolizer, which names functions and lines in the sanitizers' reports. |
 | CMake | 4.4.4 | The newest CMake, to test Stasis with. |
 | Ninja | 1.13.2 | The presets. |
 | Doxygen | 1.18.0 | The API documentation. |
