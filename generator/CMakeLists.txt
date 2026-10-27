@@ -25,6 +25,8 @@ add_executable(stasis_generator
     signatures.h
     text.c
     text.h
+    wit.c
+    wit.h
 )
 add_executable(stasis::generator ALIAS stasis_generator)
 target_link_libraries(stasis_generator PRIVATE stasis_signature stasis_sha256)

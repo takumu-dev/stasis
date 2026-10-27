@@ -1,0 +1,36 @@
+/// Names that are keywords of WIT's, and names that WIT can't take as they are.
+interface own:package@1.0.0;
+
+group world {
+    record type { func: u8, error_context: u8 }
+
+    /// A method's parameter `self`, beside one called `self_param`.
+    object resource {
+        fn static(self: u8, self_param: u8, borrow: u8) -> type;
+        /// A parameter that WIT takes as `self`.
+        fn constructor(s_elf: u8);
+    }
+
+    fn import(stream: string) -> resource;
+}
+
+group with {
+    use world::{type, resource};
+
+    record offer { from: type, as: u8 }
+    record offer_type { future: bool }
+
+    fn export(async: resource) -> offer;
+}
+
+script include {
+    uses world, with;
+
+    fn map(include: resource) -> offer;
+    /// Named as a type it takes, beside one called `offer_type`.
+    optional fn offer(of: offer, kind: offer_type) -> offer;
+    /// Named as the handle it takes.
+    optional fn resource(it: resource);
+    /// Named as a type it takes, but for an `_`.
+    optional fn offertype(kind: offer_type);
+}

@@ -48,7 +48,7 @@ its version, and the URL and SHA-256 of its release for x86-64 Linux and for Win
 | Tool | Version | What it's for |
 |---|---|---|
 | wasi-sdk | 34 | The tests build C scripts with its clang. Its clang-format and clang-tidy format and check Stasis's own code. |
-| wasm-tools | 1.262.0 | The tests build WAT modules with it, and validate scripts. |
+| wasm-tools | 1.262.0 | The tests build WAT modules with it, validate scripts, and read the generator's WIT renderings. |
 | LLVM | 23.1.4 | The newest Clang, to test Stasis with, and llvm-symbolizer, which names functions and lines in the sanitizers' reports. |
 | CMake | 4.4.4 | The newest CMake, to test Stasis with. |
 | Ninja | 1.13.2 | The presets. |
@@ -260,6 +260,7 @@ script npc {
 | `stasis-gen check <file>` | Checks the interface, and writes nothing |
 | `stasis-gen host [--prefix <prefix>] [--output-directory <dir>] <file>` | Writes the host's side of the interface, as a C header and source |
 | `stasis-gen signatures <file>` | Prints each host function's, method's and entry point's name, the encoding of its signature, and that encoding's hash, which names it in a script |
+| `stasis-gen wit [--output-directory <dir>] <file>` | Writes the interface's WIT rendering |
 
 It reports every error in the file in one run, on stderr, as `<file>:<line>:<column>: error:
 <message>`, where columns count bytes. A `note:` line after an error points at another place in
@@ -315,6 +316,56 @@ C++, a common lowercase macro such as `errno` or `small`, or one of `instance`, 
 `result`, takes a `_` after its name in C. One that comes out as a type or function the host's
 side uses, such as `uint32_t` or `stasis_call`, or as another declaration's C name, is an error.
 
+### The WIT rendering
+
+`stasis-gen wit` writes the interface as WIT, for the component model's tools to read, in one file
+named after its namespace and name, such as `acme-dungeon.wit` for `acme:dungeon@1.2.0`. The
+interface is a WIT package of the same name and version, in which:
+
+- each group is an interface, each record a record, and each kind of host object a resource with
+  its methods;
+- a handle is `borrow<T>` in a parameter, and `T` in a result or a record's field;
+- the kind of script is a world, which imports the groups it uses and exports its required entry
+  points;
+- each optional entry point is an interface of its own, `<kind>-<entry point>`, which a script's
+  world exports if the script provides the entry point.
+
+```wit
+interface combat {
+    use %world.{entity};
+
+    attack: func(target: borrow<entity>, damage: u32) -> bool;
+}
+
+world npc {
+    import %world;
+    import combat;
+
+    export tick: func(frame: u64);
+}
+
+/// The optional entry point `npc.on_hit`, which a script's world exports if the script provides it.
+interface npc-on-hit {
+    use %world.{entity};
+
+    on-hit: func(by: borrow<entity>, damage: u32);
+}
+```
+
+Names are in kebab-case, with a `%` before each that's a keyword of WIT's, such as `world`. WIT
+compares names without their `-`s, so two names that are the same once their `_`s are dropped, such
+as `last_hit` and `lasthit`, are an error in the interface when they're in one scope, or among the
+records and objects that a kind of script's entry points take and return. So is a method named as
+its kind of host object, and a group named as an optional entry point's interface, as `npc_on_hit`
+is beside `npc`'s `on_hit`. Every command reports these errors. The rendering renames two kinds of
+name instead, neither of which names anything a component imports or exports: a method's parameter
+that WIT takes as `self` becomes `self-param`, beside the handle that WIT calls `self`, and a type
+named as an optional entry point is used as `<name>-type` in the entry point's interface.
+
+`///` doc comments stay doc comments. The file starts with the same line as the host's side, which
+WIT's tools read as the start of the package's documentation, since they take every comment before
+`package` as its doc comment.
+
 ### Generating in a build
 
 A build of Stasis that isn't cross-compiling defines the generator as the target
@@ -328,8 +379,9 @@ target_sources(game PRIVATE ${dungeon_host})
 target_include_directories(game PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen)
 ```
 
-`PREFIX <prefix>` passes `--prefix`. The build is configured again whenever the interface file
-changes, since the files' names come from its header.
+`PREFIX <prefix>` passes `--prefix`, and `stasis_generate(wit ...)` writes the WIT rendering. The
+build is configured again whenever the interface file changes, since the files' names come from its
+header.
 
 A cross-compiling build can't build the generator. It sets `STASIS_GENERATOR` to the `stasis-gen`
 of a native build of the same version of Stasis, which `stasis_generate` checks with `--version`.

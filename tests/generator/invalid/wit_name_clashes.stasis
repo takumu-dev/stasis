@@ -1,0 +1,61 @@
+interface test:wit_clashes@1.0.0;
+
+group npc_on_hit {}
+
+script npc {
+    uses world, combat;
+    fn tick(frame_count: u64, framecount: u64);
+    optional fn on_hit();
+    optional fn describe();
+    optional fn get_up();
+    optional fn getup();
+    fn hit();
+    fn last_words(a: last_hit, b: lasthit);
+    fn lastwords();
+}
+
+group npc_describe {}
+group npc_hit {}
+group npcdescribe {}
+
+group world {
+    record last_hit { x: u8, y_pos: u8, ypos: u8 }
+
+    object entity {
+        fn entity();
+        fn get_name();
+        fn getname();
+        fn rename(s_elf: u8, self: u8);
+    }
+}
+
+group combat {
+    use world::{last_hit};
+
+    record lasthit { x: u8 }
+}
+
+//! wit_name_clashes.stasis:7:31: error: parameter `framecount` of entry point `npc.tick` and parameter `frame_count` of entry point `npc.tick` come out in WIT as `framecount` and `frame-count`, which WIT takes as the same name
+//! wit_name_clashes.stasis:7:13: note: parameter `frame_count` of entry point `npc.tick` is here
+//! wit_name_clashes.stasis:8:17: error: optional entry point `npc.on_hit` and group `npc_on_hit` both come out in WIT as `npc-on-hit`
+//! wit_name_clashes.stasis:3:7: note: group `npc_on_hit` is here
+//! wit_name_clashes.stasis:11:17: error: entry point `npc.getup` and entry point `npc.get_up` come out in WIT as `getup` and `get-up`, which WIT takes as the same name
+//! wit_name_clashes.stasis:10:17: note: entry point `npc.get_up` is here
+//! wit_name_clashes.stasis:13:35: error: record `combat.lasthit` and record `world.last_hit` come out in WIT as `lasthit` and `last-hit`, which WIT takes as the same name
+//! wit_name_clashes.stasis:13:22: note: record `world.last_hit` is here
+//! wit_name_clashes.stasis:14:8: error: entry point `npc.lastwords` and entry point `npc.last_words` come out in WIT as `lastwords` and `last-words`, which WIT takes as the same name
+//! wit_name_clashes.stasis:13:8: note: entry point `npc.last_words` is here
+//! wit_name_clashes.stasis:17:7: error: group `npc_describe` and optional entry point `npc.describe` both come out in WIT as `npc-describe`
+//! wit_name_clashes.stasis:9:17: note: optional entry point `npc.describe` is here
+//! wit_name_clashes.stasis:19:7: error: group `npcdescribe` and optional entry point `npc.describe` come out in WIT as `npcdescribe` and `npc-describe`, which WIT takes as the same name
+//! wit_name_clashes.stasis:9:17: note: optional entry point `npc.describe` is here
+//! wit_name_clashes.stasis:22:41: error: field `ypos` of record `world.last_hit` and field `y_pos` of record `world.last_hit` come out in WIT as `ypos` and `y-pos`, which WIT takes as the same name
+//! wit_name_clashes.stasis:22:30: note: field `y_pos` of record `world.last_hit` is here
+//! wit_name_clashes.stasis:25:12: error: method `world.entity.entity` and kind of host object `world.entity` both come out in WIT as `entity`
+//! wit_name_clashes.stasis:24:12: note: kind of host object `world.entity` is here
+//! wit_name_clashes.stasis:27:12: error: method `world.entity.getname` and method `world.entity.get_name` come out in WIT as `getname` and `get-name`, which WIT takes as the same name
+//! wit_name_clashes.stasis:26:12: note: method `world.entity.get_name` is here
+//! wit_name_clashes.stasis:28:30: error: parameter `self` of method `world.entity.rename` and parameter `s_elf` of method `world.entity.rename` come out in WIT as `self` and `s-elf`, which WIT takes as the same name
+//! wit_name_clashes.stasis:28:19: note: parameter `s_elf` of method `world.entity.rename` is here
+//! wit_name_clashes.stasis:35:12: error: record `combat.lasthit` and the `use` of `world.last_hit` come out in WIT as `lasthit` and `last-hit`, which WIT takes as the same name
+//! wit_name_clashes.stasis:33:17: note: the `use` of `world.last_hit` is here
