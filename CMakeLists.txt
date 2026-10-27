@@ -160,7 +160,8 @@ if(STASIS_INSTALL)
 endif()
 
 # The generator, stasis-gen, which reads interface files. A build that isn't cross-compiling defines
-# it, but a host's build makes it only when something needs it.
+# it, but a host's build makes it only when something needs it, such as a stasis_generate.
+include(StasisGenerate)
 if(NOT CMAKE_CROSSCOMPILING)
     if(PROJECT_IS_TOP_LEVEL)
         add_subdirectory(generator)

@@ -8,6 +8,8 @@
 #                                side of valid/<name>.stasis, or for crlf_prefixed, of crlf.stasis
 #                                with a prefix of its own
 #   generator.<what it does>     the command line itself
+#   generator.stasis_generate.*  the CMake function that runs stasis-gen in a build: in this build,
+#                                and in a host's build that names its own stasis-gen
 #
 # The golden host sides are rewritten on purpose, by building the target rewrite-generator-goldens,
 # and never by a test.
@@ -262,3 +264,40 @@ endforeach()
 set(escaping "${CMAKE_CURRENT_SOURCE_DIR}/host/escaping")
 stasis_add_compile_check(stasis_host_macro_check_c escaping_macros.c C 99 "${escaping}")
 stasis_add_compile_check(stasis_host_macro_check_cxx escaping_macros.cpp CXX 11 "${escaping}")
+
+# This build generates the host side of the sample dungeon interface with stasis_generate, compiles
+# it, and checks it against its golden host side.
+stasis_generate(host valid/dungeon.stasis OUTPUT_DIRECTORY generated VARIABLE dungeon_host)
+list(GET dungeon_host 1 dungeon_source)
+stasis_add_compile_check(stasis_generated_host_side "${dungeon_source}" C 99
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
+foreach(file IN LISTS dungeon_host)
+    cmake_path(GET file FILENAME name)
+    add_test(NAME generator.stasis_generate.writes_${name}
+        COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${file}" "${CMAKE_CURRENT_SOURCE_DIR}/host/dungeon/${name}"
+    )
+endforeach()
+
+# A host's build that doesn't build Stasis, configured and built by each test.
+foreach(case IN ITEMS
+    uses_stasis_generator
+    reruns_when_its_inputs_change
+    refuses_another_version
+    needs_a_generator
+)
+    add_test(NAME generator.stasis_generate.${case}
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCASE=${case}"
+            "-DSTASIS_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+            "-DBUILD_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/consumer/${case}"
+            "-DGENERATOR=${generator}"
+            "-DVERSION=${PROJECT_VERSION}"
+            "-DINTERFACE=${CMAKE_CURRENT_SOURCE_DIR}/valid/crlf.stasis"
+            "-DEXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/host/crlf"
+            "-DCMAKE_GENERATOR=${CMAKE_GENERATOR}"
+            "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/expect_consumer.cmake"
+    )
+endforeach()

@@ -318,4 +318,19 @@ side uses, such as `uint32_t` or `stasis_call`, or as another declaration's C na
 ### Generating in a build
 
 A build of Stasis that isn't cross-compiling defines the generator as the target
-`stasis::generator`. In a host's build, it's built only when something needs it.
+`stasis::generator`. In a host's build, it's built only when something needs it, such as
+`stasis_generate`, which adds a command that generates as the host builds, and again whenever the
+interface file or the generator changes:
+
+```cmake
+stasis_generate(host dungeon.stasis OUTPUT_DIRECTORY gen VARIABLE dungeon_host)
+target_sources(game PRIVATE ${dungeon_host})
+target_include_directories(game PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen)
+```
+
+`PREFIX <prefix>` passes `--prefix`. The build is configured again whenever the interface file
+changes, since the files' names come from its header.
+
+A cross-compiling build can't build the generator. It sets `STASIS_GENERATOR` to the `stasis-gen`
+of a native build of the same version of Stasis, which `stasis_generate` checks with `--version`.
+Without it, configuring stops at the first `stasis_generate`.
