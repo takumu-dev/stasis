@@ -1,0 +1,55 @@
+/// Entry points that take and return every scalar type, which the tests of the C API call.
+interface test:calls@1.2.0;
+
+group world {
+    record point { x: f32, y: f32 }
+    record area { from: point, to: point, label: string }
+
+    object thing {}
+}
+
+script caller {
+    uses world;
+
+    /// Returns how many times `stasis_initialize` has run in the instance.
+    fn starts() -> u32;
+
+    optional fn echo_u8(value: u8) -> u8;
+    optional fn echo_u16(value: u16) -> u16;
+    optional fn echo_u32(value: u32) -> u32;
+    optional fn echo_u64(value: u64) -> u64;
+    optional fn echo_s8(value: s8) -> s8;
+    optional fn echo_s16(value: s16) -> s16;
+    optional fn echo_s32(value: s32) -> s32;
+    optional fn echo_s64(value: s64) -> s64;
+    optional fn echo_f32(value: f32) -> f32;
+    optional fn echo_f64(value: f64) -> f64;
+    optional fn echo_bool(value: bool) -> bool;
+
+    /// Each returns its argument as the script sees it, widened to 32 bits.
+    optional fn extend_u8(value: u8) -> u32;
+    optional fn extend_u16(value: u16) -> u32;
+    optional fn extend_s8(value: s8) -> s32;
+    optional fn extend_s16(value: s16) -> s32;
+    optional fn extend_bool(value: bool) -> u32;
+
+    /// Each returns its argument's 32 bits as they are, for the host to narrow.
+    optional fn wrap_u8(value: u32) -> u8;
+    optional fn wrap_u16(value: u32) -> u16;
+    optional fn wrap_s8(value: u32) -> s8;
+    optional fn wrap_s16(value: u32) -> s16;
+    optional fn wrap_bool(value: u32) -> bool;
+
+    /// Returns a + 3b + 5c + 7d + 11 bits(e) + 13 bits(f) + 17g + 19h, modulo 2^64.
+    optional fn mix(a: u8, b: s16, c: u32, d: u64, e: f32, f: f64, g: bool, h: s64) -> u64;
+
+    /// Remembers `frame`, which `last_frame` returns.
+    optional fn tick(frame: u64);
+    optional fn last_frame() -> u64;
+
+    /// Traps.
+    optional fn fail();
+
+    /// Takes and returns records, a string and a handle, which no test calls.
+    optional fn place(within: area, by: thing) -> point;
+}

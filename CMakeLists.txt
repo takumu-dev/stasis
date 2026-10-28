@@ -119,8 +119,27 @@ stasis_add_wamr(stasis_wamr VPRINTF stasis_wamr_vprintf)
 
 # The core's own sources, which the tests' test-only library compiles again.
 set(STASIS_CORE_SOURCES
+    "${PROJECT_SOURCE_DIR}/src/allocator.c"
+    "${PROJECT_SOURCE_DIR}/src/allocator.h"
+    "${PROJECT_SOURCE_DIR}/src/boundary.c"
+    "${PROJECT_SOURCE_DIR}/src/boundary.h"
+    "${PROJECT_SOURCE_DIR}/src/descriptors.c"
+    "${PROJECT_SOURCE_DIR}/src/descriptors.h"
+    "${PROJECT_SOURCE_DIR}/src/instance.c"
+    "${PROJECT_SOURCE_DIR}/src/library.c"
+    "${PROJECT_SOURCE_DIR}/src/message.c"
+    "${PROJECT_SOURCE_DIR}/src/message.h"
+    "${PROJECT_SOURCE_DIR}/src/module.c"
+    "${PROJECT_SOURCE_DIR}/src/module.h"
+    "${PROJECT_SOURCE_DIR}/src/names.c"
+    "${PROJECT_SOURCE_DIR}/src/names.h"
+    "${PROJECT_SOURCE_DIR}/src/objects.h"
+    "${PROJECT_SOURCE_DIR}/src/platform.c"
+    "${PROJECT_SOURCE_DIR}/src/platform.h"
+    "${PROJECT_SOURCE_DIR}/src/script.c"
     "${PROJECT_SOURCE_DIR}/src/status.c"
     "${PROJECT_SOURCE_DIR}/src/wamr_hooks.c"
+    "${PROJECT_SOURCE_DIR}/src/wamr_hooks.h"
 )
 
 # The library: static unless BUILD_SHARED_LIBS asks for a shared one, with WAMR inside it either
@@ -132,6 +151,7 @@ target_sources(stasis
     PRIVATE
         ${STASIS_CORE_SOURCES}
         $<TARGET_OBJECTS:stasis_sha256>
+        $<TARGET_OBJECTS:stasis_signature>
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
