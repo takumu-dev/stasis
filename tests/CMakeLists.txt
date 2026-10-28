@@ -3,8 +3,12 @@
 #   generator.*  stasis-gen, through its command line
 #   harness.*    the harness's own checks
 #   headers.*    what the public headers include
+#   instances.*  creating, starting, calling and destroying script instances, through the C API
+#   libraries.*  creating and destroying libraries, through the C API
 #   library.*    what the built library holds, exports and references
 #   licenses.*   the licence check, on dependencies of its own
+#   load.*       loading scripts and the load check, through the C API
+#   scalars.*    scalars crossing to entry points and back, through the C API
 #   scripts.*    scripts built from source, as the tests build them
 #   sha256.*     SHA-256 against NIST's test vectors
 #   status.*     the status codes, through the C API
@@ -25,6 +29,7 @@ endif()
 add_subdirectory(harness)
 add_subdirectory(licenses)
 add_subdirectory(scripts)
+add_subdirectory(api)
 
 # The test-only library: the core and WAMR compiled again, as a static library of their own, for the
 # few tests that need what the library proper hides. In it, WAMR's printing goes to the test's
@@ -34,6 +39,7 @@ add_library(stasis_testing STATIC
     ${STASIS_CORE_SOURCES}
     wamr_output.c
     $<TARGET_OBJECTS:stasis_sha256>
+    $<TARGET_OBJECTS:stasis_signature>
 )
 target_include_directories(stasis_testing PUBLIC "${PROJECT_SOURCE_DIR}/include")
 stasis_target_holds_wamr(stasis_testing stasis_wamr_testing)

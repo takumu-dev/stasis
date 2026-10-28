@@ -1,0 +1,6 @@
+/// An interface under 0.x, whose line is its major and minor version.
+interface test:early@0.3.1;
+
+script caller {
+    fn starts() -> u32;
+}

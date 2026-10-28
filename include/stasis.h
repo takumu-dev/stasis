@@ -15,6 +15,7 @@
 #ifndef STASIS_H
 #define STASIS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -151,6 +152,22 @@ typedef enum stasis_status {
 STASIS_API const char *stasis_status_text(stasis_status status);
 
 /**
+ * @brief A library: the host's settings, and the scripts loaded into it.
+ *
+ * A process may hold several libraries, and each is independent of the others. It's opaque, and a
+ * host only ever holds a pointer to one.
+ */
+typedef struct stasis_library stasis_library;
+
+/**
+ * @brief A script: a WebAssembly module loaded into a library against an interface.
+ *
+ * It belongs to its library, and its instances belong to it. It's opaque, and a host only ever
+ * holds a pointer to one.
+ */
+typedef struct stasis_script stasis_script;
+
+/**
  * @brief A script instance: one live copy of a script, with its own memory.
  *
  * It's opaque, and a host only ever holds a pointer to one.
@@ -176,6 +193,230 @@ typedef struct stasis_string {
 typedef struct stasis_interface stasis_interface;
 
 /**
+ * @brief The stream that a script writes output to.
+ */
+typedef enum stasis_stream {
+    /** The script's standard output, its file descriptor 1. */
+    STASIS_STREAM_STDOUT = 1,
+    /** The script's standard error, its file descriptor 2. */
+    STASIS_STREAM_STDERR = 2,
+    /** Not a stream. It makes the type 32 bits wide, as ::STASIS_STATUS_MAX_ENUM does. */
+    STASIS_STREAM_MAX_ENUM = 0x7FFFFFFF,
+} stasis_stream;
+
+/**
+ * @brief The output hook, which receives what scripts write to their standard output and error.
+ *
+ * @param instance The script instance that wrote.
+ * @param user_data The library's stasis_library_settings::hook_user_data.
+ * @param stream The stream it wrote to.
+ * @param bytes The bytes it wrote, as it wrote them, which needn't be UTF-8 or whole lines.
+ * @param size The number of bytes.
+ */
+typedef void stasis_output_hook(stasis_instance *instance, void *user_data, stasis_stream stream,
+                                const char *bytes, size_t size);
+
+/**
+ * @brief The clock hook, which is scripts' only source of the time.
+ *
+ * @param instance The script instance that reads the clock.
+ * @param user_data The library's stasis_library_settings::hook_user_data.
+ * @param clock The WASI clock it reads: 0 for real time, 1 for monotonic time, 2 for the process's
+ * CPU time, and 3 for the thread's.
+ * @param precision The precision the script asks for, in nanoseconds.
+ * @param time Where the hook writes the time, in nanoseconds.
+ * @return Whether the hook wrote the time. When it declines, the script's read fails.
+ */
+typedef bool stasis_clock_hook(stasis_instance *instance, void *user_data, uint32_t clock,
+                               uint64_t precision, uint64_t *time);
+
+/**
+ * @brief The entropy hook, which is scripts' only source of randomness.
+ *
+ * @param instance The script instance that asks for random bytes.
+ * @param user_data The library's stasis_library_settings::hook_user_data.
+ * @param buffer Where the hook writes the random bytes.
+ * @param size The number of bytes it writes.
+ * @return Whether the hook filled the buffer. When it declines, the script's request fails.
+ */
+typedef bool stasis_entropy_hook(stasis_instance *instance, void *user_data, void *buffer,
+                                 size_t size);
+
+/**
+ * @brief The size of the stack that script instances keep their WebAssembly frames and operands
+ * on, unless the library's settings give another: 64 KiB.
+ */
+#define STASIS_DEFAULT_STACK_SIZE 65536
+
+/**
+ * @brief A library's settings, which stay fixed for the library's life.
+ *
+ * Settings that are all zero are the defaults. A hook that's null isn't installed. Scripts can't
+ * reach the hooks yet: they will through the system interface, which this release lacks.
+ */
+typedef struct stasis_library_settings {
+    /**
+     * The size in bytes of the stack on which each of the library's script instances keeps its
+     * WebAssembly frames and operands, beside the native stack of the thread that calls it. It's
+     * at most `UINT32_MAX`, and 0 means ::STASIS_DEFAULT_STACK_SIZE.
+     */
+    size_t stack_size;
+    /** The output hook, or null for none, so that output is discarded. */
+    stasis_output_hook *output;
+    /** The clock hook, or null for none, so that reading any clock fails. */
+    stasis_clock_hook *clock;
+    /** The entropy hook, or null for none, so that asking for random bytes fails. */
+    stasis_entropy_hook *entropy;
+    /** The pointer that every hook receives as its `user_data`. */
+    void *hook_user_data;
+} stasis_library_settings;
+
+/**
+ * @brief Creates a library.
+ *
+ * @param settings The library's settings, which Stasis copies, or null for the defaults.
+ * @param library Where the library goes, or null when creating it fails.
+ * @return ::STASIS_OK, ::STASIS_OUT_OF_MEMORY, or ::STASIS_INVALID_ARGUMENT when `library` is null
+ * or a setting is out of range.
+ */
+STASIS_API stasis_status stasis_library_create(const stasis_library_settings *settings,
+                                               stasis_library **library);
+
+/**
+ * @brief Destroys a library, once each of its scripts has been destroyed.
+ *
+ * @param library The library, or null.
+ * @return ::STASIS_OK, which destroying null also returns, or ::STASIS_REFUSED_IN_USE when the
+ * library still has scripts, which changes nothing.
+ */
+STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
+
+/**
+ * @brief Loads a WebAssembly module as a script, against an interface.
+ *
+ * Stasis copies the module's bytes, so the host may free them once this returns. Loading checks
+ * the module in stages and stops at the first that fails: it must be valid WebAssembly, built for
+ * the interface, and for a version of it compatible with the interface's. A script carries its
+ * interface's line, which is the major version, or under 0.x the major and minor versions: one
+ * built against `acme:dungeon@1.2.0` says `acme:dungeon@1`, and against `acme:dungeon@0.3.1`,
+ * `acme:dungeon@0.3`. After those stages, loading lists every problem it finds, and the code is
+ * the first one's.
+ *
+ * Between compatible versions, older or newer, every entry point that the script provides and the
+ * interface declares must have the same signature in both, and the script must provide every
+ * required one. It may provide entry points that the interface lacks, which Stasis ignores, as it
+ * ignores every export it doesn't recognise.
+ *
+ * @param library The library the script goes into.
+ * @param interface_data The interface, as `stasis-gen host` writes it. It must outlive the script.
+ * @param bytes The module's bytes. It may be null when `size` is 0.
+ * @param size The number of bytes.
+ * @param message Where a message goes, or null for none. Stasis writes a NUL-terminated message in
+ * English, which names each problem on a line of its own when loading fails, and is empty when it
+ * succeeds. A message that doesn't fit is cut short. Its wording may change in any release.
+ * @param message_size The size of the buffer `message` points at, which may be 0.
+ * @param script Where the script goes, or null when loading fails.
+ * @return ::STASIS_OK, or one of:
+ * - ::STASIS_INVALID_MODULE: the bytes aren't valid WebAssembly;
+ * - ::STASIS_WRONG_INTERFACE: the script was built for another interface;
+ * - ::STASIS_INCOMPATIBLE_VERSION: it was built for an incompatible version of the interface;
+ * - ::STASIS_INTERFACE_MISMATCH: it lacks a required entry point, or provides one with another
+ *   signature;
+ * - ::STASIS_INVALID_SCRIPT: it breaks Stasis's rules for scripts, such as with names that don't
+ *   parse, or entry points of more than one kind of script;
+ * - ::STASIS_OUT_OF_MEMORY;
+ * - ::STASIS_INVALID_ARGUMENT: a pointer that's needed is null, a buffer's size doesn't match its
+ *   pointer, or the interface's descriptor format is newer than this release reads.
+ */
+STASIS_API stasis_status stasis_script_load(stasis_library *library,
+                                            const stasis_interface *interface_data,
+                                            const void *bytes, size_t size, char *message,
+                                            size_t message_size, stasis_script **script);
+
+/**
+ * @brief Destroys a script, once each of its instances has been destroyed.
+ *
+ * @param script The script, or null.
+ * @return ::STASIS_OK, which destroying null also returns, or ::STASIS_REFUSED_IN_USE when the
+ * script still has instances, which changes nothing.
+ */
+STASIS_API stasis_status stasis_script_destroy(stasis_script *script);
+
+/** @brief The size of a script's identity, in bytes. */
+#define STASIS_IDENTITY_SIZE 32
+
+/**
+ * @brief A script's identity: the SHA-256 of its module's sections in order, leaving out custom
+ * sections.
+ *
+ * Each section is hashed as its id, its size as the shortest LEB128 that holds it, and its
+ * contents. So two copies of a module that differ only in custom sections, such as a copy stripped
+ * of its debug information, are the same script, even when the tool that stripped it wrote the
+ * sections' sizes in fewer bytes.
+ *
+ * @param script The script.
+ * @return The ::STASIS_IDENTITY_SIZE bytes of the identity, which stay valid until the script is
+ * destroyed, or null when `script` is null.
+ */
+STASIS_API const uint8_t *stasis_script_identity(const stasis_script *script);
+
+/**
+ * @brief Whether a script provides an entry point.
+ *
+ * @param script The script.
+ * @param entry_point The entry point's id among those of the script's interface, as for
+ * stasis_call().
+ * @return true for every required entry point, and for each optional one the script provides.
+ * false for any other, and when `script` is null or `entry_point` is out of range.
+ */
+STASIS_API bool stasis_script_provides(const stasis_script *script, uint32_t entry_point);
+
+/**
+ * @brief Creates an instance of a script, which has to be started before it's called.
+ *
+ * Creating an instance runs none of the script's code.
+ *
+ * @param script The script.
+ * @param user_data A pointer of the host's, which Stasis never dereferences, and which
+ * stasis_instance_user_data() returns.
+ * @param instance Where the instance goes, or null when creating it fails.
+ * @return ::STASIS_OK, ::STASIS_OUT_OF_MEMORY, or ::STASIS_INVALID_ARGUMENT when `script` or
+ * `instance` is null.
+ */
+STASIS_API stasis_status stasis_instance_create(stasis_script *script, void *user_data,
+                                                stasis_instance **instance);
+
+/**
+ * @brief Starts a script instance, running its script's initialisation once.
+ *
+ * Starting runs `stasis_initialize`, if the script exports it, as a call into the instance. Once it
+ * has returned, the instance is ready for its entry points to be called.
+ *
+ * @param instance The script instance, which must have been created and not started.
+ * @return ::STASIS_OK once the instance is ready. ::STASIS_TRAP when initialisation trapped, and a
+ * refusal when the instance can't start: ::STASIS_REFUSED_NESTED, ::STASIS_REFUSED_TRAPPED, or
+ * ::STASIS_REFUSED_STARTED once it has started. ::STASIS_INVALID_ARGUMENT when `instance` is null.
+ */
+STASIS_API stasis_status stasis_instance_start(stasis_instance *instance);
+
+/**
+ * @brief Destroys a script instance.
+ *
+ * @param instance The script instance, or null.
+ * @return ::STASIS_OK, which destroying null also returns, or ::STASIS_REFUSED_RUNNING when the
+ * instance is running, which changes nothing.
+ */
+STASIS_API stasis_status stasis_instance_destroy(stasis_instance *instance);
+
+/**
+ * @brief The user-data pointer a script instance was created with.
+ *
+ * @param instance The script instance.
+ * @return Its user data, or null when `instance` is null.
+ */
+STASIS_API void *stasis_instance_user_data(const stasis_instance *instance);
+
+/**
  * @brief Calls one of a script instance's entry points.
  *
  * The typed callers that `stasis-gen host` writes each call it for one entry point, with the
@@ -195,7 +436,10 @@ typedef struct stasis_interface stasis_interface;
  * refusal when the instance couldn't take the call: ::STASIS_REFUSED_NESTED,
  * ::STASIS_REFUSED_TRAPPED, ::STASIS_REFUSED_NOT_STARTED, or ::STASIS_REFUSED_ABSENT for an
  * optional entry point the script doesn't provide. ::STASIS_INVALID_ARGUMENT when an argument fails
- * a check.
+ * a check: when `instance` is null, `interface_data` isn't the interface its script was loaded
+ * against, `entry_point` is out of range, or `arguments` or `result` is null where it's needed. So
+ * far only scalars cross, so a call to an entry point that takes or returns a string, a record or
+ * a handle is ::STASIS_INVALID_ARGUMENT too.
  */
 STASIS_API stasis_status stasis_call(stasis_instance *instance,
                                      const stasis_interface *interface_data, uint32_t entry_point,

@@ -3,10 +3,11 @@
 Stasis is a game scripting library. It runs scripts compiled to WebAssembly in a sandbox inside a
 game, and saves and restores their state as snapshots.
 
-Stasis is at an early stage and has no release yet. So far, its C API declares the status codes its
-functions will return and the call that generated code makes into it, the library holds the
-WebAssembly runtime its scripts will run on, and its generator checks interface files and writes
-their host side, but nothing runs scripts yet.
+Stasis is at an early stage and has no release yet. So far, a host can load a script against its
+interface, create and start instances of it, and call their entry points with scalar arguments and
+results. The generator checks interface files and writes their host side and their WIT rendering.
+Host functions, strings, records, handles, the system interface, trap reports and snapshots are
+still to come.
 
 ## Requirements
 
@@ -401,3 +402,52 @@ header.
 A cross-compiling build can't build the generator. It sets `STASIS_GENERATOR` to the `stasis-gen`
 of a native build of the same version of Stasis, which `stasis_generate` checks with `--version`.
 Without it, configuring stops at the first `stasis_generate`.
+
+## Running scripts
+
+A host creates a library, loads each script into it against an interface's generated data, and
+creates and starts instances of the script, whose entry points it then calls through the typed
+callers:
+
+```c
+stasis_library *library = NULL;
+stasis_library_create(NULL, &library);
+
+char message[1024];
+stasis_script *script = NULL;
+if (stasis_script_load(library, &acme_dungeon_interface, bytes, size, message, sizeof message,
+                       &script) != STASIS_OK) {
+    /* message names each problem on a line of its own */
+}
+
+stasis_instance *instance = NULL;
+stasis_instance_create(script, entity, &instance);
+stasis_instance_start(instance);
+acme_dungeon_npc_tick(instance, frame);
+
+stasis_instance_destroy(instance);
+stasis_script_destroy(script);
+stasis_library_destroy(library);
+```
+
+- Every function that can fail returns a `stasis_status`, and out-parameters are null when it
+  fails. `stasis_status_text` describes each code.
+- A library's settings hold the size of the stack each instance keeps its WebAssembly frames on,
+  64 KiB by default. A process may hold several libraries, and one library may hold scripts of
+  several interfaces.
+- Loading copies the module's bytes, so the host may free them as soon as it returns. It checks
+  the module in stages, and stops at the first that fails: it must be valid WebAssembly
+  (`STASIS_INVALID_MODULE`), built for the interface (`STASIS_WRONG_INTERFACE`), and for its line
+  (`STASIS_INCOMPATIBLE_VERSION`), which is the major version, or under 0.x the major and minor
+  versions. Then it lists every problem it finds: a required entry point missing or an entry point
+  with another signature (`STASIS_INTERFACE_MISMATCH`), and names that don't parse or disagree
+  (`STASIS_INVALID_SCRIPT`). A script built against an older or newer minor version loads, and an
+  entry point that the host's interface lacks is ignored.
+- A loaded script answers its identity, the SHA-256 of its module's sections without the custom
+  ones, so a copy stripped of its debug information is the same script, and which optional entry
+  points it provides.
+- Creating an instance runs no script code. Starting runs the script's `stasis_initialize` once, if
+  it exports one, and only a started instance can be called. A call that traps returns
+  `STASIS_TRAP`, and the instance refuses every later call.
+- Objects are destroyed children first: destroying a script that has instances, or a library that
+  has scripts, is refused with `STASIS_REFUSED_IN_USE`. Destroying null does nothing.

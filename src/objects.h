@@ -1,0 +1,66 @@
+/* The C API's three objects, which the core's sources share: a library, the scripts loaded into
+ * it, and their instances. Each object's count of children changes only under Stasis's lock. */
+
+#ifndef STASIS_OBJECTS_H
+#define STASIS_OBJECTS_H
+
+#include <stasis.h>
+#include <stasis_interface.h>
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <wasm_export.h>
+
+/* The export that initialises a new instance, which Stasis calls when it starts. */
+#define STASIS_INITIALIZE_NAME "stasis_initialize"
+
+struct stasis_library {
+    /* The host's settings, as it gave them. */
+    stasis_library_settings settings;
+    /* The size of each instance's stack, with the default in place of 0. */
+    uint32_t stack_size;
+    /* The number of the library's scripts that haven't been destroyed. */
+    size_t script_count;
+};
+
+struct stasis_script {
+    stasis_library *library;
+    const stasis_interface *interface_data;
+    uint8_t identity[STASIS_IDENTITY_SIZE];
+    /* Stasis's copy of the module's bytes, which WAMR loaded from. WAMR writes into it and keeps
+     * pointers into it, so it's freed only once the module is unloaded. */
+    uint8_t *bytes;
+    wasm_module_t module;
+    /* The export name of each of the interface's entry points, as a C string, in the order of
+     * their ids, or null for one the script doesn't provide. */
+    char **entry_points;
+    size_t entry_point_count;
+    /* Whether the script exports stasis_initialize. */
+    bool initializes;
+    /* The number of the script's instances that haven't been destroyed. */
+    size_t instance_count;
+};
+
+/* Where an instance is in its life. It's created, then ready once it has started, and running
+ * during each call into it, until a call traps, which leaves it trapped for good. */
+enum instance_state {
+    INSTANCE_CREATED,
+    INSTANCE_READY,
+    INSTANCE_RUNNING,
+    INSTANCE_TRAPPED,
+};
+
+struct stasis_instance {
+    stasis_script *script;
+    void *user_data;
+    enum instance_state state;
+    wasm_module_inst_t module_instance;
+    wasm_exec_env_t exec_env;
+    /* stasis_initialize, or null when the script doesn't export it. */
+    wasm_function_inst_t initialize;
+    /* The function behind each entry point, by id, or null for one the script doesn't provide. */
+    wasm_function_inst_t *entry_points;
+};
+
+#endif

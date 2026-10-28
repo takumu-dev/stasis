@@ -1,0 +1,375 @@
+#include "descriptors.h"
+
+#include <stasis.h>
+#include <stasis_interface.h>
+
+#include "allocator.h"
+#include "module.h"
+#include "signature.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/* Where a walk is within one record: the field it comes to next, and how many fields remain. */
+struct walk_frame {
+    const stasis_field *next;
+    size_t remaining;
+};
+
+const stasis_script_kind *stasis_interface_script_kind(const stasis_interface *interface_data) {
+    if (interface_data->format < 1 || interface_data->format > STASIS_INTERFACE_FORMAT) {
+        return NULL;
+    }
+    if (interface_data->script_count != 1 || interface_data->scripts == NULL) {
+        return NULL;
+    }
+    const stasis_script_kind *kind = &interface_data->scripts[0];
+    if (kind->entry_point_count > UINT32_MAX) {
+        return NULL;
+    }
+    if (kind->entry_point_count > 0 && kind->entry_points == NULL) {
+        return NULL;
+    }
+    return kind;
+}
+
+bool stasis_interface_usable(const stasis_interface *interface_data) {
+    const stasis_script_kind *kind = stasis_interface_script_kind(interface_data);
+    if (kind == NULL || kind->name == NULL) {
+        return false;
+    }
+    if (interface_data->space == NULL || interface_data->name == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < kind->entry_point_count; i++) {
+        const stasis_entry_point *entry_point = &kind->entry_points[i];
+        if (entry_point->name == NULL) {
+            return false;
+        }
+        if (entry_point->parameter_count > 0 && entry_point->parameters == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool stasis_walk_init(struct descriptor_walk *walk, const stasis_interface *interface_data) {
+    walk->interface_data = interface_data;
+    /* Records that don't hold themselves nest no deeper than there are records. */
+    walk->capacity = interface_data->record_count;
+    walk->frames = NULL;
+    if (walk->capacity > 0) {
+        walk->frames = stasis_allocate_zeroed(walk->capacity, sizeof *walk->frames);
+        if (walk->frames == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void stasis_walk_free(struct descriptor_walk *walk) {
+    stasis_deallocate(walk->frames);
+    walk->frames = NULL;
+}
+
+/* The kind of host object a handle's value names, or null if there's no such kind, or it or its
+ * group lacks a name. */
+static const stasis_object_kind *kind_of(const stasis_interface *interface_data,
+                                         const stasis_value *value) {
+    if (value->index >= interface_data->kind_count || interface_data->kinds == NULL) {
+        return NULL;
+    }
+    const stasis_object_kind *kind = &interface_data->kinds[value->index];
+    if (kind->name == NULL || kind->group >= interface_data->group_count ||
+        interface_data->groups == NULL || interface_data->groups[kind->group].name == NULL) {
+        return NULL;
+    }
+    return kind;
+}
+
+/* The record a record's value names, or null if there's no such record or it has no fields. */
+static const stasis_record *record_of(const stasis_interface *interface_data,
+                                      const stasis_value *value) {
+    if (value->index >= interface_data->record_count || interface_data->records == NULL) {
+        return NULL;
+    }
+    const stasis_record *record = &interface_data->records[value->index];
+    if (record->fields == NULL || record->field_count == 0) {
+        return NULL;
+    }
+    return record;
+}
+
+/* Whether a value that isn't a record is one of the types this release knows, and a handle names
+ * a kind of host object that's there. */
+static bool leaf_usable(const stasis_interface *interface_data, const stasis_value *value) {
+    switch (value->type) {
+    case STASIS_TYPE_U8:
+    case STASIS_TYPE_U16:
+    case STASIS_TYPE_U32:
+    case STASIS_TYPE_U64:
+    case STASIS_TYPE_S8:
+    case STASIS_TYPE_S16:
+    case STASIS_TYPE_S32:
+    case STASIS_TYPE_S64:
+    case STASIS_TYPE_F32:
+    case STASIS_TYPE_F64:
+    case STASIS_TYPE_BOOL:
+    case STASIS_TYPE_STRING:
+        return true;
+    case STASIS_TYPE_HANDLE:
+        return kind_of(interface_data, value) != NULL;
+    case STASIS_TYPE_RECORD:
+    case STASIS_TYPE_MAX_ENUM:
+        break;
+    }
+    return false;
+}
+
+/* What a walk comes to as it goes through a value, in order: each value that isn't a record, and
+ * each record's start, its fields' names and its end, around what the record holds. */
+enum walk_event {
+    WALK_LEAF,
+    WALK_RECORD,
+    WALK_FIELD,
+    WALK_END,
+};
+
+/* Called for each event of a walk, with the value for WALK_LEAF and the field's name for
+ * WALK_FIELD. */
+typedef void walk_visit(void *context, enum walk_event event, const stasis_value *leaf,
+                        const char *name);
+
+/* Walks a value, calling `visit` for each event in order. A record's fields are walked in turn,
+ * and those of the records they hold within theirs, keeping the walk's place in each record on a
+ * stack. Returns false if the value's descriptors are malformed. */
+static bool walk_value(struct descriptor_walk *walk, const stasis_value *value, walk_visit *visit,
+                       void *context) {
+    const stasis_interface *interface_data = walk->interface_data;
+    if (value->type != STASIS_TYPE_RECORD) {
+        if (!leaf_usable(interface_data, value)) {
+            return false;
+        }
+        visit(context, WALK_LEAF, value, NULL);
+        return true;
+    }
+    const stasis_record *record = record_of(interface_data, value);
+    if (record == NULL || walk->capacity == 0) {
+        return false;
+    }
+    size_t depth = 1;
+    walk->frames[0].next = record->fields;
+    walk->frames[0].remaining = record->field_count;
+    visit(context, WALK_RECORD, NULL, NULL);
+    while (depth > 0) {
+        struct walk_frame *frame = &walk->frames[depth - 1];
+        if (frame->remaining == 0) {
+            visit(context, WALK_END, NULL, NULL);
+            depth--;
+            continue;
+        }
+        const stasis_field *field = frame->next++;
+        frame->remaining--;
+        if (field->name == NULL) {
+            return false;
+        }
+        visit(context, WALK_FIELD, NULL, field->name);
+        if (field->value.type != STASIS_TYPE_RECORD) {
+            if (!leaf_usable(interface_data, &field->value)) {
+                return false;
+            }
+            visit(context, WALK_LEAF, &field->value, NULL);
+            continue;
+        }
+        const stasis_record *inner = record_of(interface_data, &field->value);
+        /* Going deeper than there are records means a record holds itself. */
+        if (inner == NULL || depth == walk->capacity) {
+            return false;
+        }
+        walk->frames[depth].next = inner->fields;
+        walk->frames[depth].remaining = inner->field_count;
+        depth++;
+        visit(context, WALK_RECORD, NULL, NULL);
+    }
+    return true;
+}
+
+/* The encoding's scalar for each of the descriptors' types that is one. */
+static const stasis_signature_scalar signature_scalars[] = {
+    [STASIS_TYPE_U8] = STASIS_SIGNATURE_U8,     [STASIS_TYPE_U16] = STASIS_SIGNATURE_U16,
+    [STASIS_TYPE_U32] = STASIS_SIGNATURE_U32,   [STASIS_TYPE_U64] = STASIS_SIGNATURE_U64,
+    [STASIS_TYPE_S8] = STASIS_SIGNATURE_S8,     [STASIS_TYPE_S16] = STASIS_SIGNATURE_S16,
+    [STASIS_TYPE_S32] = STASIS_SIGNATURE_S32,   [STASIS_TYPE_S64] = STASIS_SIGNATURE_S64,
+    [STASIS_TYPE_F32] = STASIS_SIGNATURE_F32,   [STASIS_TYPE_F64] = STASIS_SIGNATURE_F64,
+    [STASIS_TYPE_BOOL] = STASIS_SIGNATURE_BOOL, [STASIS_TYPE_STRING] = STASIS_SIGNATURE_STRING,
+};
+
+/* A signature being encoded, with the interface its handles' kinds are in. */
+struct encoding {
+    stasis_signature signature;
+    const stasis_interface *interface_data;
+};
+
+/* Encodes each event of a walk into the signature: a scalar or a handle, and a record's start,
+ * fields and end. */
+static void encode(void *context, enum walk_event event, const stasis_value *leaf,
+                   const char *name) {
+    struct encoding *encoding = context;
+    switch (event) {
+    case WALK_LEAF:
+        if (leaf->type == STASIS_TYPE_HANDLE) {
+            const stasis_object_kind *kind = kind_of(encoding->interface_data, leaf);
+            stasis_signature_add_handle(&encoding->signature,
+                                        encoding->interface_data->groups[kind->group].name,
+                                        kind->name);
+        } else {
+            stasis_signature_add_scalar(&encoding->signature, signature_scalars[leaf->type]);
+        }
+        break;
+    case WALK_RECORD:
+        stasis_signature_begin_record(&encoding->signature);
+        break;
+    case WALK_FIELD:
+        stasis_signature_begin_field(&encoding->signature, name);
+        break;
+    case WALK_END:
+        stasis_signature_end_record(&encoding->signature);
+        break;
+    }
+}
+
+bool stasis_entry_point_hash(struct descriptor_walk *walk, const stasis_entry_point *entry_point,
+                             char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]) {
+    struct encoding encoding;
+    encoding.interface_data = walk->interface_data;
+    stasis_signature_init(&encoding.signature, NULL, 0);
+    for (size_t i = 0; i < entry_point->parameter_count; i++) {
+        if (!walk_value(walk, &entry_point->parameters[i], encode, &encoding)) {
+            return false;
+        }
+    }
+    if (entry_point->result != NULL) {
+        stasis_signature_begin_result(&encoding.signature);
+        if (!walk_value(walk, entry_point->result, encode, &encoding)) {
+            return false;
+        }
+    }
+    (void)stasis_signature_finish(&encoding.signature, hash);
+    return true;
+}
+
+/* Values being flattened: the core types of as many as fit, and how many there are in all. */
+struct flattening {
+    uint8_t *types;
+    size_t capacity;
+    size_t count;
+};
+
+/* Adds one core type, which the types hold if there's room for it. */
+static void add_flat(struct flattening *flattening, uint8_t type) {
+    if (flattening->count < flattening->capacity) {
+        flattening->types[flattening->count] = type;
+    }
+    flattening->count++;
+}
+
+/* Flattens each value that isn't a record into its core types: a string into a pointer and a
+ * length, and a handle into its value. */
+static void flatten(void *context, enum walk_event event, const stasis_value *leaf,
+                    const char *name) {
+    (void)name;
+    if (event != WALK_LEAF) {
+        return;
+    }
+    struct flattening *flattening = context;
+    switch (leaf->type) {
+    case STASIS_TYPE_U64:
+    case STASIS_TYPE_S64:
+        add_flat(flattening, MODULE_I64);
+        break;
+    case STASIS_TYPE_F32:
+        add_flat(flattening, MODULE_F32);
+        break;
+    case STASIS_TYPE_F64:
+        add_flat(flattening, MODULE_F64);
+        break;
+    case STASIS_TYPE_STRING:
+        add_flat(flattening, MODULE_I32);
+        add_flat(flattening, MODULE_I32);
+        break;
+    default:
+        add_flat(flattening, MODULE_I32);
+        break;
+    }
+}
+
+bool stasis_entry_point_core_type(struct descriptor_walk *walk,
+                                  const stasis_entry_point *entry_point, struct core_type *type) {
+    struct flattening parameters;
+    parameters.types = type->parameters;
+    parameters.capacity = STASIS_MAX_FLAT_PARAMETERS;
+    parameters.count = 0;
+    for (size_t i = 0; i < entry_point->parameter_count; i++) {
+        if (!walk_value(walk, &entry_point->parameters[i], flatten, &parameters)) {
+            return false;
+        }
+    }
+    if (parameters.count > STASIS_MAX_FLAT_PARAMETERS) {
+        type->parameters[0] = MODULE_I32;
+        parameters.count = 1;
+    }
+    type->parameter_count = (uint32_t)parameters.count;
+
+    type->result_count = 0;
+    if (entry_point->result != NULL) {
+        struct flattening results;
+        results.types = type->results;
+        results.capacity = STASIS_MAX_FLAT_RESULTS;
+        results.count = 0;
+        if (!walk_value(walk, entry_point->result, flatten, &results)) {
+            return false;
+        }
+        if (results.count > STASIS_MAX_FLAT_RESULTS) {
+            type->results[0] = MODULE_I32;
+            results.count = 1;
+        }
+        type->result_count = (uint32_t)results.count;
+    }
+    return true;
+}
+
+size_t stasis_value_size(const stasis_interface *interface_data, const stasis_value *value) {
+    switch (value->type) {
+    case STASIS_TYPE_U8:
+    case STASIS_TYPE_S8:
+        return sizeof(uint8_t);
+    case STASIS_TYPE_U16:
+    case STASIS_TYPE_S16:
+        return sizeof(uint16_t);
+    case STASIS_TYPE_U32:
+    case STASIS_TYPE_S32:
+        return sizeof(uint32_t);
+    case STASIS_TYPE_U64:
+    case STASIS_TYPE_S64:
+        return sizeof(uint64_t);
+    case STASIS_TYPE_F32:
+        return sizeof(float);
+    case STASIS_TYPE_F64:
+        return sizeof(double);
+    case STASIS_TYPE_BOOL:
+        return sizeof(bool);
+    case STASIS_TYPE_STRING:
+        return sizeof(stasis_string);
+    case STASIS_TYPE_HANDLE:
+        return sizeof(void *);
+    case STASIS_TYPE_RECORD:
+        if (value->index < interface_data->record_count && interface_data->records != NULL) {
+            return interface_data->records[value->index].size;
+        }
+        break;
+    case STASIS_TYPE_MAX_ENUM:
+        break;
+    }
+    return 0;
+}
