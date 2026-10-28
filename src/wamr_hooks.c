@@ -1,5 +1,7 @@
 #include "wamr_hooks.h"
 
+#include "allocator.h"
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -49,6 +51,7 @@ static unsigned char *memory_block(void *memory) {
 
 static void *stasis_wamr_malloc(mem_alloc_usage_t usage, void *user_data, unsigned int size) {
     (void)user_data;
+    STASIS_COUNT_ALLOCATION();
     if (usage == Alloc_For_LinearMemory) {
         return resize_memory(NULL, size);
     }
@@ -59,6 +62,7 @@ static void *stasis_wamr_realloc(mem_alloc_usage_t usage, bool full_size_mapped,
                                  void *pointer, unsigned int size) {
     (void)full_size_mapped;
     (void)user_data;
+    STASIS_COUNT_ALLOCATION();
     if (usage == Alloc_For_LinearMemory) {
         return resize_memory(memory_block(pointer), size);
     }

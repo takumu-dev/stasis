@@ -5,6 +5,7 @@
 
 #include "allocator.h"
 #include "boundary.h"
+#include "calls.h"
 #include "descriptors.h"
 /* NOLINTNEXTLINE(misc-include-cleaner): it defines the struct that stasis.h's type names */
 #include "objects.h"
@@ -35,18 +36,17 @@ static size_t align_up(size_t size, size_t alignment) {
     return (size + alignment - 1) / alignment * alignment;
 }
 
-/* Whether Stasis can call a host function yet: when all its values are scalars, each of which
- * flattens to one core value. */
+/* Whether Stasis can call a host function yet: when each of its values can cross. */
 static bool callable(const stasis_host_function *function) {
     for (size_t i = 0; i < function->parameter_count; i++) {
-        if (!stasis_is_scalar(&function->parameters[i])) {
+        if (!stasis_can_cross(&function->parameters[i])) {
             return false;
         }
     }
     if (function->result == NULL) {
         return true;
     }
-    return stasis_is_scalar(function->result);
+    return stasis_can_cross(function->result);
 }
 
 /* Ends the call that `instance` is running with the trap of Stasis's own it has raised: WAMR
@@ -57,54 +57,223 @@ static void end_call(stasis_instance *instance, wasm_exec_env_t exec_env) {
                                                                 : "Stasis raised a trap");
 }
 
+/* Lifts argument number `position` of a host function, from 1, a string of `size` bytes at
+ * `address` in the script's memory, into the stasis_string at `destination`, pointing into the
+ * memory. Returns false, having raised a boundary violation, if it isn't all in the memory, or
+ * isn't UTF-8. */
+static bool lift_string(stasis_instance *instance, const stasis_host_function *function,
+                        size_t position, uint32_t address, uint32_t size,
+                        unsigned char *destination) {
+    const struct script_memory memory = stasis_script_memory(instance->module_instance);
+    if ((uint64_t)address + size > memory.size) {
+        const struct host_function_name name =
+            stasis_host_function_name(instance->script->interface_data, function);
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the script passed argument %lu of " HOST_FUNCTION_NAME_FORMAT
+                                " at %lu in its memory, where its %lu bytes run past its end at "
+                                "%llu",
+                                (unsigned long)position, HOST_FUNCTION_NAME_ARGUMENTS(name),
+                                (unsigned long)address, (unsigned long)size,
+                                (unsigned long long)memory.size);
+        return false;
+    }
+    const size_t valid = stasis_utf8_length(memory.base + address, size);
+    if (valid < size) {
+        const struct host_function_name name =
+            stasis_host_function_name(instance->script->interface_data, function);
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the script passed argument %lu of " HOST_FUNCTION_NAME_FORMAT
+                                " as a string of %lu bytes that isn't UTF-8, from offset %lu",
+                                (unsigned long)position, HOST_FUNCTION_NAME_ARGUMENTS(name),
+                                (unsigned long)size, (unsigned long)valid);
+        return false;
+    }
+    stasis_string string;
+    string.data = (const char *)memory.base + address;
+    string.size = size;
+    memcpy(destination, &string, sizeof string);
+    return true;
+}
+
+/* Lifts a host function's arguments from the script's core arguments, each in a slot of its own,
+ * into `arguments`. Returns false, having raised a boundary violation, if one can't cross. */
+static bool lift_flat(stasis_instance *instance, const stasis_host_function *function,
+                      const uint64_t *core, unsigned char *arguments) {
+    size_t slot = 0;
+    for (size_t i = 0; i < function->parameter_count; i++) {
+        const stasis_value *parameter = &function->parameters[i];
+        if (parameter->type == STASIS_TYPE_STRING) {
+            if (!lift_string(instance, function, i + 1, (uint32_t)core[slot],
+                             (uint32_t)core[slot + 1], arguments + parameter->offset)) {
+                return false;
+            }
+        } else {
+            stasis_lift_raw_scalar(parameter, &core[slot], arguments);
+        }
+        slot += stasis_flat_count(parameter);
+    }
+    return true;
+}
+
 /* Lifts a host function's arguments from where the script spilled them in its memory, at
  * `address`, laid out as the canonical ABI lays out a tuple of them, into `arguments`. Returns
  * false, having raised a boundary violation, if they aren't all in the memory, or aren't aligned
- * as the strictest of them needs. */
-static bool lift_spilled(stasis_instance *instance, wasm_exec_env_t exec_env,
-                         const stasis_host_function *function, uint32_t address,
-                         unsigned char *arguments) {
+ * as the strictest of them needs, or if a string among them can't cross. */
+static bool lift_spilled(stasis_instance *instance, const stasis_host_function *function,
+                         uint32_t address, unsigned char *arguments) {
     size_t size = 0;
     size_t alignment = 1;
     for (size_t i = 0; i < function->parameter_count; i++) {
-        const size_t field = stasis_scalar_memory_size(&function->parameters[i]);
-        size = align_up(size, field) + field;
-        if (field > alignment) {
-            alignment = field;
+        const size_t field_alignment = stasis_memory_alignment(&function->parameters[i]);
+        size = align_up(size, field_alignment) + stasis_memory_size(&function->parameters[i]);
+        if (field_alignment > alignment) {
+            alignment = field_alignment;
         }
     }
     size = align_up(size, alignment);
 
-    wasm_memory_inst_t memory =
-        wasm_runtime_get_default_memory(wasm_runtime_get_module_inst(exec_env));
-    const uint64_t memory_size = memory == NULL ? 0
-                                                : wasm_memory_get_cur_page_count(memory) *
-                                                      wasm_memory_get_bytes_per_page(memory);
+    const struct script_memory memory = stasis_script_memory(instance->module_instance);
     if (address % alignment != 0) {
+        const struct host_function_name name =
+            stasis_host_function_name(instance->script->interface_data, function);
         (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
-                                "the script passed the arguments of `%s` at %lu in its memory, "
-                                "which isn't a multiple of their alignment, %lu",
-                                function->name, (unsigned long)address, (unsigned long)alignment);
+                                "the script passed the arguments of " HOST_FUNCTION_NAME_FORMAT
+                                " at %lu in its memory, which isn't a multiple of their "
+                                "alignment, %lu",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)address,
+                                (unsigned long)alignment);
         return false;
     }
-    if ((uint64_t)address + size > memory_size) {
+    if ((uint64_t)address + size > memory.size) {
+        const struct host_function_name name =
+            stasis_host_function_name(instance->script->interface_data, function);
         (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
-                                "the script passed the arguments of `%s` at %lu in its memory, "
-                                "where their %lu bytes run past its end at %llu",
-                                function->name, (unsigned long)address, (unsigned long)size,
-                                (unsigned long long)memory_size);
+                                "the script passed the arguments of " HOST_FUNCTION_NAME_FORMAT
+                                " at %lu in its memory, where their %lu bytes run past its end at "
+                                "%llu",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)address,
+                                (unsigned long)size, (unsigned long long)memory.size);
         return false;
     }
 
-    const unsigned char *at = (const unsigned char *)wasm_memory_get_base_address(memory) + address;
+    const unsigned char *at = memory.base + address;
     size_t offset = 0;
     for (size_t i = 0; i < function->parameter_count; i++) {
-        const size_t field = stasis_scalar_memory_size(&function->parameters[i]);
-        offset = align_up(offset, field);
-        stasis_load_scalar(&function->parameters[i], at + offset, arguments);
-        offset += field;
+        const stasis_value *parameter = &function->parameters[i];
+        offset = align_up(offset, stasis_memory_alignment(parameter));
+        if (parameter->type == STASIS_TYPE_STRING) {
+            if (!lift_string(instance, function, i + 1, stasis_load_u32(at + offset),
+                             stasis_load_u32(at + offset + 4), arguments + parameter->offset)) {
+                return false;
+            }
+        } else {
+            stasis_load_scalar(parameter, at + offset, arguments);
+        }
+        offset += stasis_memory_size(parameter);
     }
     return true;
+}
+
+/* Checks the return area at `area` in the script's memory that the script passed a host function
+ * for its result. Returns false, having raised a boundary violation, if it isn't all in the memory,
+ * or isn't aligned as the result needs. */
+static bool check_area(stasis_instance *instance, const stasis_host_function *function,
+                       uint32_t area) {
+    const struct script_memory memory = stasis_script_memory(instance->module_instance);
+    const size_t alignment = stasis_memory_alignment(function->result);
+    const size_t size = stasis_memory_size(function->result);
+    if (area % alignment == 0 && (uint64_t)area + size <= memory.size) {
+        return true;
+    }
+    const struct host_function_name name =
+        stasis_host_function_name(instance->script->interface_data, function);
+    if (area % alignment != 0) {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the script passed the return area of " HOST_FUNCTION_NAME_FORMAT
+                                " at %lu in its memory, which isn't a multiple of its alignment, "
+                                "%lu",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)area,
+                                (unsigned long)alignment);
+    } else {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the script passed the return area of " HOST_FUNCTION_NAME_FORMAT
+                                " at %lu in its memory, where its %lu bytes run past its end at "
+                                "%llu",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)area,
+                                (unsigned long)size, (unsigned long long)memory.size);
+    }
+    return false;
+}
+
+/* Checks the string a host function returned. Returns false, having raised a host abort, if its
+ * data is null though it isn't empty, if it's larger than a string may be, or if it isn't UTF-8. */
+static bool check_returned_string(stasis_instance *instance, const stasis_host_function *function,
+                                  stasis_string string) {
+    size_t valid = 0;
+    const enum string_fault fault = stasis_check_host_string(string, &valid);
+    if (fault == STRING_CROSSES) {
+        return true;
+    }
+    const struct host_function_name name =
+        stasis_host_function_name(instance->script->interface_data, function);
+    switch (fault) {
+    case STRING_CROSSES:
+        break;
+    case STRING_DATA_NULL:
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HOST_ABORT,
+                                "the host function " HOST_FUNCTION_NAME_FORMAT
+                                " returned a string of %lu bytes whose data is null",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)string.size);
+        break;
+    case STRING_TOO_LARGE:
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HOST_ABORT,
+                                "the host function " HOST_FUNCTION_NAME_FORMAT
+                                " returned a string of %llu bytes, more than the %lu a string may "
+                                "have",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long long)string.size,
+                                (unsigned long)STASIS_MAX_STRING_SIZE);
+        break;
+    case STRING_NOT_UTF8:
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HOST_ABORT,
+                                "the host function " HOST_FUNCTION_NAME_FORMAT
+                                " returned a string of %lu bytes that isn't UTF-8, from offset %lu",
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)string.size,
+                                (unsigned long)valid);
+        break;
+    }
+    return false;
+}
+
+/* Lowers the string a host function returned, at `result`, into the script's memory, and its
+ * address and size into the return area at `area`. Returns false when the call is to end, having
+ * raised a trap, or because the script's cabi_realloc trapped. */
+static bool lower_string_result(stasis_instance *instance, const stasis_host_function *function,
+                                const unsigned char *result, uint32_t area) {
+    stasis_string string;
+    memcpy(&string, result, sizeof string);
+    if (!check_returned_string(instance, function, string)) {
+        return false;
+    }
+    const struct placed_value value = {NULL, 0, function};
+    uint32_t address = 0;
+    if (!stasis_place_string(instance, &value, string, &address)) {
+        return false;
+    }
+    /* cabi_realloc may have grown the memory, and moved it, but the area is still in it. */
+    const struct script_memory memory = stasis_script_memory(instance->module_instance);
+    stasis_store_u32(memory.base + area, address);
+    stasis_store_u32(memory.base + area + 4, (uint32_t)string.size);
+    return true;
+}
+
+/* Whether a host function's result flattens into more core values than a function can return, so
+ * that it goes into a return area of the script's, whose address the script passes after its
+ * arguments. */
+static bool returns_area(const stasis_host_function *function) {
+    if (function->result == NULL) {
+        return false;
+    }
+    return stasis_flat_count(function->result) > STASIS_MAX_FLAT_RESULTS;
 }
 
 /* What WAMR calls in place of every host function, in its raw calling convention: with the script's
@@ -112,23 +281,35 @@ static bool lift_spilled(stasis_instance *instance, wasm_exec_env_t exec_env,
  * function's descriptor is its attachment, and the instance is its execution environment's user
  * data. */
 static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
-    /* WAMR sets the attachment to null once a host function calls back into the script, so it's
-     * read first. */
+    /* WAMR sets the attachment to null once a host function calls back into the script, as
+     * lowering a string does, so it's read first. */
     const stasis_host_function *function = wasm_runtime_get_function_attachment(exec_env);
     stasis_instance *instance = wasm_runtime_get_user_data(exec_env);
+    if (!stasis_may_leave(instance)) {
+        const struct host_function_name name =
+            stasis_host_function_name(instance->script->interface_data, function);
+        stasis_refuse_leaving(instance, &name);
+        end_call(instance, exec_env);
+        return;
+    }
     unsigned char *arguments = instance->scratch;
     unsigned char *result = arguments + instance->script->host_functions.result_offset;
-    /* Every value Stasis can pass yet is a scalar, which flattens to one core value, so the
-     * arguments spill into memory when there are more of them than core parameters. */
-    if (function->parameter_count > STASIS_MAX_FLAT_PARAMETERS) {
-        if (!lift_spilled(instance, exec_env, function, (uint32_t)core[0], arguments)) {
-            end_call(instance, exec_env);
-            return;
-        }
+    size_t flat_count = 0;
+    for (size_t i = 0; i < function->parameter_count; i++) {
+        flat_count += stasis_flat_count(&function->parameters[i]);
+    }
+    const bool spilled = flat_count > STASIS_MAX_FLAT_PARAMETERS;
+    bool lifted = false;
+    if (spilled) {
+        lifted = lift_spilled(instance, function, (uint32_t)core[0], arguments);
     } else {
-        for (size_t i = 0; i < function->parameter_count; i++) {
-            stasis_lift_raw_scalar(&function->parameters[i], &core[i], arguments);
-        }
+        lifted = lift_flat(instance, function, core, arguments);
+    }
+    const bool has_area = returns_area(function);
+    const uint32_t area = has_area ? (uint32_t)core[spilled ? 1 : flat_count] : 0;
+    if (!lifted || (has_area && !check_area(instance, function, area))) {
+        end_call(instance, exec_env);
+        return;
     }
     function->thunk(instance, function->parameter_count > 0 ? arguments : NULL,
                     function->result != NULL ? result : NULL);
@@ -138,8 +319,16 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
         end_call(instance, exec_env);
         return;
     }
-    if (function->result != NULL) {
+    if (function->result == NULL) {
+        return;
+    }
+    if (!has_area) {
         stasis_lower_raw_scalar(function->result, result, &core[0]);
+        return;
+    }
+    /* When cabi_realloc trapped of itself, WAMR unwinds the call already. */
+    if (!lower_string_result(instance, function, result, area) && instance->raised.raised) {
+        end_call(instance, exec_env);
     }
 }
 

@@ -568,6 +568,190 @@ static bool check_imports(struct load *load) {
     return true;
 }
 
+/* The export that frees the results of the entry point exported as `name`, or null if the script
+ * doesn't export one. */
+static const struct module_export *find_post_return(const struct load *load, stasis_string name) {
+    const size_t prefix_size = sizeof post_return_prefix - 1;
+    for (uint32_t i = 0; i < load->module.export_count; i++) {
+        const stasis_string export_name = load->module.exports[i].name;
+        if (export_name.size == prefix_size + name.size &&
+            memcmp(export_name.data, post_return_prefix, prefix_size) == 0 &&
+            memcmp(export_name.data + prefix_size, name.data, name.size) == 0) {
+            return &load->module.exports[i];
+        }
+    }
+    return NULL;
+}
+
+/* The core function type of cabi_realloc, as the canonical ABI types it. */
+static const struct core_type realloc_type = {
+    .parameters = {MODULE_I32, MODULE_I32, MODULE_I32, MODULE_I32},
+    .parameter_count = 4,
+    .results = {MODULE_I32},
+    .result_count = 1,
+};
+
+/* How an export compares with the function Stasis calls it as. */
+enum export_type {
+    EXPORT_EXPECTED,
+    EXPORT_NOT_A_FUNCTION,
+    EXPORT_OF_OTHER_TYPE,
+};
+
+/* Compares an export with a function of the core type `expected`. When it's a function of another
+ * type, writes its type and `expected` as text, as in `(i32, i64) -> (f32)`, into `actual` and
+ * `expected_text`, which hold CORE_TYPE_SIZE bytes each. */
+static enum export_type compare_type(const struct load *load, const struct module_export *export,
+                                     const struct core_type *expected, char *actual,
+                                     char *expected_text) {
+    if (export->kind != MODULE_FUNCTION) {
+        return EXPORT_NOT_A_FUNCTION;
+    }
+    const struct module_function_type *type =
+        stasis_module_function_type(&load->module, export->index);
+    if (type == NULL || has_core_type(type, expected)) {
+        return EXPORT_EXPECTED;
+    }
+    format_type(actual, CORE_TYPE_SIZE, type->parameters, type->parameter_count, type->results,
+                type->result_count);
+    format_type(expected_text, CORE_TYPE_SIZE, expected->parameters, expected->parameter_count,
+                expected->results, expected->result_count);
+    return EXPORT_OF_OTHER_TYPE;
+}
+
+/* Notes the problem with an export that isn't a function. */
+static void not_a_function(struct load *load, const struct module_export *export) {
+    problem(load, STASIS_INVALID_SCRIPT,
+            "the script's `%.*s` is exported as something other than a function",
+            printed(export->name), export->name.data);
+}
+
+/* Sets `holds` to whether any of the `count` values at `values` holds a string. Returns false if
+ * their descriptors are malformed. */
+static bool any_holds_string(struct load *load, const stasis_value *values, size_t count,
+                             bool *holds) {
+    *holds = false;
+    for (size_t i = 0; i < count && !*holds; i++) {
+        if (!stasis_holds_string(&load->walk, &values[i], holds)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The problem with cabi_realloc, if the script lacks it though Stasis needs it to put the result of
+ * a host function it imports, or the arguments of an entry point it provides, into its memory,
+ * which it does for each that holds a string. Returns false if the interface's descriptors are
+ * malformed. */
+static bool check_realloc_needed(struct load *load) {
+    for (uint32_t i = 0; i < load->module.export_count; i++) {
+        if (stasis_string_is(load->module.exports[i].name, STASIS_REALLOC_NAME)) {
+            return true;
+        }
+    }
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        const struct host_import *host = &load->host_imports[i];
+        if (host->function == NULL || !host->same_signature || host->function->result == NULL) {
+            continue;
+        }
+        bool holds = false;
+        if (!any_holds_string(load, host->function->result, 1, &holds)) {
+            return false;
+        }
+        if (holds) {
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script lacks the export `" STASIS_REALLOC_NAME "`, which Stasis needs to "
+                    "put the result of the host function " HOST_FUNCTION_FORMAT " into its memory",
+                    HOST_FUNCTION_ARGUMENTS(load->imports[i].name.scope, host->field));
+            return true;
+        }
+    }
+    for (size_t id = 0; id < load->kind->entry_point_count; id++) {
+        const stasis_entry_point *entry_point = &load->kind->entry_points[id];
+        if (load->entry_points[id].count != 1 || !load->entry_points[id].same_signature) {
+            continue;
+        }
+        bool holds = false;
+        if (!any_holds_string(load, entry_point->parameters, entry_point->parameter_count,
+                              &holds)) {
+            return false;
+        }
+        if (holds) {
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script lacks the export `" STASIS_REALLOC_NAME
+                    "`, which Stasis needs to put the arguments of the entry point `%s.%s` into "
+                    "its memory",
+                    load->kind->name, entry_point->name);
+            return true;
+        }
+    }
+    return true;
+}
+
+/* The problems with the exports of the canonical ABI's that Stasis calls: cabi_realloc, which must
+ * be there if Stasis needs it, and of the canonical ABI's type, and the cabi_post_* of each entry
+ * point, which takes the entry point's core results. Returns false if the interface's descriptors
+ * are malformed. */
+static bool check_abi_exports(struct load *load) {
+    for (uint32_t i = 0; i < load->module.export_count; i++) {
+        const struct module_export *export = &load->module.exports[i];
+        if (!stasis_string_is(export->name, STASIS_REALLOC_NAME)) {
+            continue;
+        }
+        char actual[CORE_TYPE_SIZE];
+        char expected[CORE_TYPE_SIZE];
+        switch (compare_type(load, export, &realloc_type, actual, expected)) {
+        case EXPORT_EXPECTED:
+            break;
+        case EXPORT_NOT_A_FUNCTION:
+            not_a_function(load, export);
+            break;
+        case EXPORT_OF_OTHER_TYPE:
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script's `" STASIS_REALLOC_NAME
+                    "` is a function of type %s, where Stasis calls it as %s",
+                    actual, expected);
+            break;
+        }
+    }
+    for (size_t id = 0; id < load->kind->entry_point_count; id++) {
+        const stasis_entry_point *entry_point = &load->kind->entry_points[id];
+        const struct entry_point_exports *exports = &load->entry_points[id];
+        if (exports->count != 1 || !exports->same_signature) {
+            continue;
+        }
+        const struct module_export *post_return = find_post_return(load, exports->first->name);
+        if (post_return == NULL) {
+            continue;
+        }
+        struct core_type entry_type;
+        if (!stasis_entry_point_core_type(&load->walk, entry_point, &entry_type)) {
+            return false;
+        }
+        struct core_type post_type;
+        memset(&post_type, 0, sizeof post_type);
+        memcpy(post_type.parameters, entry_type.results, entry_type.result_count);
+        post_type.parameter_count = entry_type.result_count;
+        char actual[CORE_TYPE_SIZE];
+        char expected[CORE_TYPE_SIZE];
+        switch (compare_type(load, post_return, &post_type, actual, expected)) {
+        case EXPORT_EXPECTED:
+            break;
+        case EXPORT_NOT_A_FUNCTION:
+            not_a_function(load, post_return);
+            break;
+        case EXPORT_OF_OTHER_TYPE:
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script's `%.*s` is a function of type %s, where the results of the entry "
+                    "point `%s.%s` make it %s",
+                    printed(post_return->name), post_return->name.data, actual, load->kind->name,
+                    entry_point->name, expected);
+            break;
+        }
+    }
+    return check_realloc_needed(load);
+}
+
 /* Whether an export's name is that of a function some backend runs by itself when it creates an
  * instance, as it would a start section: WAMR runs `__wasm_call_ctors` and `__post_instantiate`,
  * and with its own system interface, `_initialize`. */
@@ -708,7 +892,7 @@ static stasis_status check(struct load *load) {
         return STASIS_INVALID_ARGUMENT;
     }
     check_names(load);
-    if (!check_exports(load) || !check_imports(load)) {
+    if (!check_exports(load) || !check_imports(load) || !check_abi_exports(load)) {
         return STASIS_INVALID_ARGUMENT;
     }
     check_rules(load);
@@ -744,7 +928,13 @@ static void free_script(stasis_script *script) {
             stasis_deallocate(script->entry_points[id]);
         }
     }
+    if (script->post_returns != NULL) {
+        for (size_t id = 0; id < script->entry_point_count; id++) {
+            stasis_deallocate(script->post_returns[id]);
+        }
+    }
     stasis_deallocate((void *)script->entry_points);
+    stasis_deallocate((void *)script->post_returns);
     stasis_host_functions_free(&script->host_functions);
     stasis_deallocate(script->unsnapshottable);
     stasis_module_code_free(&script->code);
@@ -753,21 +943,32 @@ static void free_script(stasis_script *script) {
 }
 
 /* Fills in what a script that has passed the load check keeps of the check: its identity, the
- * export name of each entry point it provides, why it isn't snapshottable, and where its code is,
- * which the reader maps only if WAMR's trap reports need it. Returns false if there's no memory for
- * it. */
+ * export name of each entry point it provides, and of its cabi_post_*, why it isn't snapshottable,
+ * and where its code is, which the reader maps only if WAMR's trap reports need it. Returns false
+ * if there's no memory for it. */
 static bool keep_check(stasis_script *script, struct load *load) {
     memcpy(script->identity, load->module.identity, sizeof script->identity);
     script->entry_point_count = load->kind->entry_point_count;
     script->entry_points =
         (char **)stasis_allocate_zeroed(script->entry_point_count, sizeof *script->entry_points);
-    if (script->entry_points == NULL) {
+    script->post_returns =
+        (char **)stasis_allocate_zeroed(script->entry_point_count, sizeof *script->post_returns);
+    if (script->entry_points == NULL || script->post_returns == NULL) {
         return false;
     }
     for (size_t id = 0; id < script->entry_point_count; id++) {
-        if (load->entry_points[id].count == 1) {
-            script->entry_points[id] = copy_name(load->entry_points[id].first->name);
-            if (script->entry_points[id] == NULL) {
+        if (load->entry_points[id].count != 1) {
+            continue;
+        }
+        const stasis_string name = load->entry_points[id].first->name;
+        script->entry_points[id] = copy_name(name);
+        if (script->entry_points[id] == NULL) {
+            return false;
+        }
+        const struct module_export *post_return = find_post_return(load, name);
+        if (post_return != NULL) {
+            script->post_returns[id] = copy_name(post_return->name);
+            if (script->post_returns[id] == NULL) {
                 return false;
             }
         }

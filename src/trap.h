@@ -11,10 +11,11 @@
 #include <stdbool.h>
 #include <wasm_export.h>
 
-/* A trap report, and the memory its message and frames are in, which is null when there was none
- * to give them. */
+/* A trap report, whether it has been filled in, and the memory its message and frames are in,
+ * which is null when there was none to give them. */
 struct trap_record {
     stasis_trap report;
+    bool filled;
     void *memory;
 };
 

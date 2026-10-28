@@ -487,15 +487,16 @@ static void expect_spill_refused(uint32_t address, const char *message) {
 }
 
 TEST(spilled_arguments_outside_memory_trap) {
-    expect_spill_refused(65448, "the script passed the arguments of `seventeen` at 65448 in its "
-                                "memory, where their 96 bytes run past its end at 65536");
-    expect_spill_refused(0xFFFFFFF8U, "the script passed the arguments of `seventeen` at "
+    expect_spill_refused(65448,
+                         "the script passed the arguments of `host.seventeen` at 65448 in its "
+                         "memory, where their 96 bytes run past its end at 65536");
+    expect_spill_refused(0xFFFFFFF8U, "the script passed the arguments of `host.seventeen` at "
                                       "4294967288 in its memory, where their 96 bytes run past "
                                       "its end at 65536");
 }
 
 TEST(misaligned_spilled_arguments_trap) {
-    expect_spill_refused(1028, "the script passed the arguments of `seventeen` at 1028 in its "
+    expect_spill_refused(1028, "the script passed the arguments of `host.seventeen` at 1028 in its "
                                "memory, which isn't a multiple of their alignment, 8");
 }
 

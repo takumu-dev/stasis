@@ -123,6 +123,8 @@ set(STASIS_CORE_SOURCES
     "${PROJECT_SOURCE_DIR}/src/allocator.h"
     "${PROJECT_SOURCE_DIR}/src/boundary.c"
     "${PROJECT_SOURCE_DIR}/src/boundary.h"
+    "${PROJECT_SOURCE_DIR}/src/calls.c"
+    "${PROJECT_SOURCE_DIR}/src/calls.h"
     "${PROJECT_SOURCE_DIR}/src/descriptors.c"
     "${PROJECT_SOURCE_DIR}/src/descriptors.h"
     "${PROJECT_SOURCE_DIR}/src/host_functions.c"

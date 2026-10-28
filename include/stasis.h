@@ -306,8 +306,14 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * interface declares must have the same signature in both, and the script must provide every
  * required one. It may provide entry points that the interface lacks, which Stasis ignores, as it
  * ignores every export it doesn't recognise. Every host function it imports must be the
- * interface's, with the same signature. So far only scalars cross, so a script may import a host
- * function that takes or returns a string, a record or a handle, but a call to it traps.
+ * interface's, with the same signature. So far only scalars and strings cross, so a script may
+ * import a host function that takes or returns a record or a handle, but a call to it traps.
+ *
+ * Values cross by the canonical ABI, as wit-bindgen uses it on a core module. So a script that
+ * Stasis puts strings into, as the results of host functions it imports or the arguments of entry
+ * points it provides, exports `cabi_realloc`, which Stasis allocates them with. Its `cabi_realloc`,
+ * if it has one, and the `cabi_post_` that follows an entry point's export name, which frees the
+ * entry point's results, are functions of the canonical ABI's types.
  *
  * A script must also keep Stasis's rules, so that creating an instance of it runs none of its code
  * and can fail only for lack of memory. It has no start section, and exports nothing that a
@@ -336,7 +342,9 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  *   signature;
  * - ::STASIS_INVALID_SCRIPT: it breaks Stasis's rules for scripts, such as with names that don't
  *   parse, entry points of more than one kind of script, an entry point or a host function of
- *   another type than its signature makes it, or any of the rules above;
+ *   another type than its signature makes it, a `cabi_realloc` that's missing where it's needed, a
+ *   `cabi_realloc` or `cabi_post_` of another type than the canonical ABI's, or any of the rules
+ *   above;
  * - ::STASIS_OUT_OF_MEMORY;
  * - ::STASIS_INVALID_ARGUMENT: a pointer that's needed is null, a buffer's size doesn't match its
  *   pointer, or the interface's descriptor format is newer than this release reads.
@@ -469,16 +477,21 @@ STASIS_API void *stasis_instance_user_data(const stasis_instance *instance);
  * null when it takes none.
  * @param result Where the entry point's result goes, laid out as its descriptor says, or null when
  * it returns nothing. It's zeroed when the call fails. The strings in a result, in records too,
- * stay valid until the next call into the instance, or until the instance is destroyed.
- * @return ::STASIS_OK once the entry point has returned. ::STASIS_TRAP when it trapped, and a
- * refusal when the instance couldn't take the call: ::STASIS_REFUSED_NESTED while an instance, this
- * one or another, is running on this thread, ::STASIS_REFUSED_TRAPPED,
- * ::STASIS_REFUSED_NOT_STARTED, or ::STASIS_REFUSED_ABSENT for an optional entry point the script
- * doesn't provide. ::STASIS_INVALID_ARGUMENT when an argument fails
- * a check: when `instance` is null, `interface_data` isn't the interface its script was loaded
- * against, `entry_point` is out of range, or `arguments` or `result` is null where it's needed. So
- * far only scalars cross, so a call to an entry point that takes or returns a string, a record or
- * a handle is ::STASIS_INVALID_ARGUMENT too.
+ * are Stasis's copies, which stay valid until the next call into the instance, or until the
+ * instance is destroyed, and the script has freed its own with its `cabi_post_`, if it has one.
+ * @return ::STASIS_OK once the entry point has returned. ::STASIS_TRAP when it trapped, or so did
+ * the script's `cabi_realloc` or `cabi_post_` as Stasis called them, and a refusal when the
+ * instance couldn't take the call: ::STASIS_REFUSED_NESTED while an instance, this one or another,
+ * is running on this thread, ::STASIS_REFUSED_TRAPPED, ::STASIS_REFUSED_NOT_STARTED, or
+ * ::STASIS_REFUSED_ABSENT for an optional entry point the script doesn't provide.
+ * ::STASIS_INVALID_ARGUMENT when an argument fails a check: when `instance` is null,
+ * `interface_data` isn't the interface its script was loaded against, `entry_point` is out of
+ * range, `arguments` or `result` is null where it's needed, or a string argument's data is null
+ * though it isn't empty, or it's larger than 2^31 - 1 bytes, or isn't UTF-8. So far only scalars
+ * and strings cross, and only as arguments that flatten into at most 16 core values, so a call to
+ * an entry point that takes or returns a record or a handle, or takes more arguments than that, is
+ * ::STASIS_INVALID_ARGUMENT too. ::STASIS_OUT_OF_MEMORY when there was no memory to copy the
+ * result's strings, though the entry point has run, and the script has freed its results.
  */
 STASIS_API stasis_status stasis_call(stasis_instance *instance,
                                      const stasis_interface *interface_data, uint32_t entry_point,
@@ -488,9 +501,9 @@ STASIS_API stasis_status stasis_call(stasis_instance *instance,
  * @brief What made a script instance trap, whatever the backend it ran on.
  *
  * A kind's number never changes and is never reused, but any minor release may add kinds, so a host
- * handles kinds it doesn't know. Of Stasis's own kinds, so far only ::STASIS_TRAP_KIND_HOST_ABORT
- * and ::STASIS_TRAP_KIND_BOUNDARY_VIOLATION can happen: the others come with strings, handles and
- * the system interface, which this release lacks.
+ * handles kinds it doesn't know. Of Stasis's own kinds, so far only ::STASIS_TRAP_KIND_HOST_ABORT,
+ * ::STASIS_TRAP_KIND_BOUNDARY_VIOLATION and ::STASIS_TRAP_KIND_ALLOCATION_FAILED can happen: the
+ * others come with handles and the system interface, which this release lacks.
  */
 typedef enum stasis_trap_kind {
     /**
@@ -524,16 +537,20 @@ typedef enum stasis_trap_kind {
     STASIS_TRAP_KIND_STACK_EXHAUSTED = 6,
     /** Any other trap of WebAssembly's, such as an access to a table outside its bounds. */
     STASIS_TRAP_KIND_OTHER = 7,
-    /** A host function or hook aborted the call. */
+    /**
+     * A host function or hook aborted the call, or a host function returned a value that can't
+     * cross, such as a string that isn't UTF-8.
+     */
     STASIS_TRAP_KIND_HOST_ABORT = 8,
     /**
      * The script broke a rule of the boundary between it and the host, such as by passing a string
-     * that isn't UTF-8, a handle it was never given, or arguments outside its memory.
+     * that isn't UTF-8, a handle it was never given, or arguments outside its memory, or by calling
+     * an import while Stasis was inside its `cabi_realloc` or a `cabi_post_` function.
      */
     STASIS_TRAP_KIND_BOUNDARY_VIOLATION = 9,
     /**
-     * Stasis needed memory in the instance to hand the script a value, and the script's allocator
-     * had none.
+     * Stasis needed memory in the instance to hand the script a value, and the script's
+     * `cabi_realloc` returned null.
      */
     STASIS_TRAP_KIND_ALLOCATION_FAILED = 10,
     /** The instance needed a handle for a host object, and had none left. */
@@ -583,7 +600,7 @@ typedef struct stasis_trap {
     stasis_trap_kind kind;
     /**
      * What happened, as NUL-terminated UTF-8: the backend's description of a trap of WebAssembly's
-     * own, and the host's message for ::STASIS_TRAP_KIND_HOST_ABORT. Every other message is in
+     * own, and the host's message when a host function or hook aborts. Every other message is in
      * English, and its wording may change in any release.
      */
     const char *message;

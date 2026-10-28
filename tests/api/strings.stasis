@@ -1,0 +1,72 @@
+/// Host functions and entry points that pass strings, which the tests of strings call, and entry
+/// points through which the tests lay out the script's memory and steer its `cabi_realloc` and
+/// `cabi_post_*` functions.
+interface test:strings@1.0.0;
+
+group host {
+    /// Records its argument.
+    fn take(text: string);
+    /// Records its arguments, whose strings are among scalars.
+    fn take_mixed(before: u8, first: string, middle: u64, second: string, after: f32);
+    /// Records its arguments: nine strings, which flatten into eighteen core values, so that they
+    /// spill into the script's memory, and a u8 after them.
+    fn take_nine(
+        a: string, b: string, c: string, d: string, e: string, f: string, g: string, h: string,
+        i: string, j: u8
+    );
+    /// Returns the string the test has set.
+    fn give() -> string;
+    /// Records its argument, and returns the string the test has set.
+    fn swap(text: string) -> string;
+}
+
+script user {
+    uses host;
+
+    /// Passes its argument to `host.take`.
+    optional fn pass(text: string);
+    /// Passes its arguments to `host.take_mixed`.
+    optional fn pass_mixed(before: u8, first: string, middle: u64, second: string, after: f32);
+    /// Returns what `host.give` returns.
+    optional fn fetch() -> string;
+    /// Passes its argument to `host.swap`, and returns what that returns.
+    optional fn relay(text: string) -> string;
+
+    /// Calls `host.take_nine` with the strings "1", "22" and so on up to "999999999", and 7.
+    optional fn pass_nine();
+    /// Returns its argument.
+    optional fn echo(text: string) -> string;
+    /// Returns the number of bytes in its argument.
+    optional fn measure(text: string) -> u32;
+
+    /// Calls `host.take` with the string of `size` bytes at `address`, as they are.
+    optional fn pass_at(address: u32, size: u32);
+    /// Calls `host.take_mixed` with 9, the string of `first_size` bytes at `first`, 10, the string
+    /// of `second_size` bytes at `second`, and 11, as they are.
+    optional fn pass_mixed_at(first: u32, first_size: u32, second: u32, second_size: u32);
+    /// Calls `host.take_nine` with its spilled arguments at `address`, as they are.
+    optional fn pass_nine_at(address: u32);
+    /// Calls `host.give` with its return area at `area`, as it is.
+    optional fn fetch_into(area: u32);
+    /// Returns `area` as its return area, as it is, for the test to have laid it out.
+    optional fn return_at(area: u32) -> string;
+
+    /// Stores `value` at `address` in the script's memory, as 4 bytes, little-endian, or 1.
+    optional fn store(address: u32, value: u32);
+    optional fn store_byte(address: u32, value: u8);
+    /// Returns the number of pages of the script's memory.
+    optional fn pages() -> u32;
+
+    /// Sets what the script's `cabi_realloc` does from its next call on, and what its
+    /// `cabi_post_*` functions do, each by a number that the script's comments explain.
+    optional fn set_realloc(mode: u32);
+    optional fn set_post(mode: u32);
+    /// Returns how many times the script's `cabi_realloc` has been called, and its argument
+    /// `index`, from 0, in the last call.
+    optional fn reallocs() -> u32;
+    optional fn realloc_argument(index: u32) -> u32;
+    /// Returns how many times the script's `cabi_post_*` functions have been called, and the
+    /// argument of the last call that had one.
+    optional fn posts() -> u32;
+    optional fn post_argument() -> u32;
+}

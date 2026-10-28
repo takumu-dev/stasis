@@ -5,9 +5,9 @@ game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, a host can load a script against its
 interface, learn whether it's snapshottable, create and start instances of it, call their entry
-points and have scripts call its host functions, with scalar arguments and results, and read the
-trap report of an instance that traps. The generator checks interface files and writes their host
-side and their WIT rendering. Strings, records, handles, the system interface and snapshots are
+points and have scripts call its host functions, with scalars and strings as arguments and results,
+and read the trap report of an instance that traps. The generator checks interface files and writes
+their host side and their WIT rendering. Records, handles, the system interface and snapshots are
 still to come.
 
 ## Requirements
@@ -496,8 +496,8 @@ calls through the thunks in the host's side. Stasis lifts each argument from the
 canonical ABI does it, and lowers the result back. Arguments that flatten into more than 16 core
 parameters spill into the script's memory, which Stasis reads them from, and a script that passes
 them outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. So far only
-scalars cross, so a script that calls a host function that takes or returns a string, a record or a
-handle traps.
+scalars and strings cross, so a script that calls a host function that takes or returns a record or
+a handle traps.
 
 - A host function ends the call it's part of with `stasis_abort`. It then returns as it would
   otherwise, Stasis ignores its result, and the call traps as `STASIS_TRAP_KIND_HOST_ABORT`, with
@@ -528,3 +528,46 @@ handle traps.
   before a host function, traps as `STASIS_TRAP_KIND_STACK_EXHAUSTED`. Stasis installs no signal
   handler and touches no stack, so a host function that uses more stack than it's sure of crashes,
   as any C function would.
+
+### Strings
+
+A string crosses as the canonical ABI lays it out, as UTF-8, with its address and size in the
+script's memory. On the host's side it's a `stasis_string`, which isn't NUL-terminated. Whenever
+Stasis puts a string into the script's memory, it allocates it there with the script's
+`cabi_realloc`, as wit-bindgen's bindings expect, and from then on it's the script's.
+
+- A host function's string argument points into the script's memory, and is valid only until the
+  host function returns. Before it runs, Stasis checks that each is in the script's memory and is
+  UTF-8. A script that passes one that isn't traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`, with a
+  message that names the host function and the argument by its position.
+- A host function's string result points at storage that outlives the call. Stasis puts a copy
+  into the script's memory, and writes where it is into the return area that the script passed. A
+  string whose data is null though it isn't empty, that's larger than 2^31 - 1 bytes, or that isn't
+  UTF-8 traps as `STASIS_TRAP_KIND_HOST_ABORT`.
+
+  ```c
+  stasis_string acme_dungeon_world_entity_name(stasis_instance *instance,
+                                               acme_dungeon_world_entity *self) {
+      /* the entity's own name, which outlives the call */
+      stasis_string name = {self->name, strlen(self->name)};
+      return name;
+  }
+  ```
+- An entry point's string argument is put into the script's memory the same way. One that can't
+  cross, as above, makes the call `STASIS_INVALID_ARGUMENT`, before the script runs.
+- An entry point's string result is checked as a host function's arguments are. Stasis copies it
+  into a buffer that the instance owns, and then calls the entry point's `cabi_post_`, if the
+  script exports one, which frees the script's own. So the host's copy stays valid until the next
+  call into the instance or its destruction, and after the first few calls, no call allocates.
+- A script that takes strings from Stasis, as the results of host functions it imports or the
+  arguments of entry points it provides, has to export `cabi_realloc`, or it fails to load with
+  `STASIS_INVALID_SCRIPT`, as it does if its `cabi_realloc` or an entry point's `cabi_post_` isn't
+  of the canonical ABI's type.
+- A `cabi_realloc` that returns null when asked for any bytes traps as
+  `STASIS_TRAP_KIND_ALLOCATION_FAILED`, and one that returns an address outside memory as
+  `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. While Stasis is inside
+  `cabi_realloc` or a `cabi_post_`, the script may call no import, and one that does traps as
+  `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`, so a script can't recurse through the host. When one of
+  them traps, the call into the instance traps with that trap's kind, message and frames.
+- `cabi_realloc` can grow the script's memory, which can move it, so Stasis takes where the memory
+  is afresh after each call to it.
