@@ -1,6 +1,6 @@
-/* A WebAssembly module, as the core reads it for itself, without WAMR: its identity, and the
- * types, imports, functions, tables, memories, globals, exports, start section, segments and
- * instructions that the load check looks at.
+/* A WebAssembly module, as the core reads it for itself, without WAMR: its identity, the types,
+ * imports, functions, tables, memories, globals, exports, start section, segments and instructions
+ * that the load check looks at, and where its code is, which trap reports look at.
  *
  * The module's bytes are untrusted, so the reader checks every length and count against the bytes
  * that hold it. It isn't a validator, though: it reads only what the load check needs, and WAMR's
@@ -115,7 +115,31 @@ struct module_export {
     uint32_t index;
 };
 
+/* Where a function the module defines has its code: the offsets in the module's bytes of its first
+ * instruction, after its locals, and of the end of its body. */
+struct module_body {
+    uint32_t start;
+    uint32_t end;
+};
+
+/* Where the module's code is, down to where each instruction starts, which tells the instruction
+ * that an offset a backend gives for a frame falls in. */
+struct module_code {
+    /* The number of functions the module imports, which come before those it defines. */
+    uint32_t function_import_count;
+    /* The body of each function the module defines. */
+    struct module_body *bodies;
+    uint32_t body_count;
+    /* A bit for each byte of the module up to the end of its code, set where an instruction
+     * starts: bit `offset % 8` of byte `offset / 8`. */
+    uint8_t *instruction_starts;
+};
+
 struct module {
+    /* The module's bytes, which the offsets it holds count from. */
+    const uint8_t *bytes;
+    /* Whether the reader notes where the code is, in `code`, which is empty otherwise. */
+    bool maps_code;
     /* The SHA-256 of the non-custom sections, in order. */
     uint8_t identity[STASIS_IDENTITY_SIZE];
     struct module_function_type *types;
@@ -153,6 +177,7 @@ struct module {
     /* Where the code first uses each instruction that changes a table or drops a segment, by its
      * enum module_change. */
     struct module_first_use first_uses[MODULE_CHANGE_COUNT];
+    struct module_code code;
 };
 
 /* How reading a module ended. */
@@ -164,11 +189,24 @@ enum module_read {
 };
 
 /* Reads the module in `bytes`. Its names point into the bytes, which must outlive it. Whatever the
- * result, `module` must be freed with stasis_module_free. */
-enum module_read stasis_module_read(struct module *module, const uint8_t *bytes, size_t size);
+ * result, `module` must be freed with stasis_module_free. Where the code is, which only trap
+ * reports need, and only with a backend whose frames give offsets in the module, is noted only if
+ * `maps_code` is set. */
+enum module_read stasis_module_read(struct module *module, const uint8_t *bytes, size_t size,
+                                    bool maps_code);
 
 /* Frees what reading a module allocated. */
 void stasis_module_free(struct module *module);
+
+/* Frees what reading a module's code allocated, which stasis_module_free does too. */
+void stasis_module_code_free(struct module_code *code);
+
+/* The offset of the instruction that holds the byte before `offset`, among the instructions of the
+ * function at `function` in the function index space. That's the instruction a frame of the
+ * function was at, when a backend gives the offset just past it. It's STASIS_NO_OFFSET when none of
+ * the function's instructions holds that byte, and for a function the module imports. */
+uint32_t stasis_module_instruction_before(const struct module_code *code, uint32_t function,
+                                          uint32_t offset);
 
 /* How a message spells a value type, or "?" for a byte that isn't one. */
 const char *stasis_module_type_name(uint8_t type);

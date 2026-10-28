@@ -10,7 +10,8 @@
 #
 # To upgrade WAMR, update its entry in third_party/dependencies.json, run this script on a checkout
 # of the new release's tag, and derive the file lists and WAMR's definitions in
-# cmake/StasisWamr.cmake again.
+# cmake/StasisWamr.cmake again. Then check src/wamr_frames.c and the descriptions of traps in
+# src/trap.c against the new release's sources.
 
 cmake_minimum_required(VERSION 3.25...4.4)
 

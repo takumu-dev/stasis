@@ -4,7 +4,9 @@
 #
 # Upgrading WAMR is deliberate: copy the new release with tools/vendor_wamr.cmake, then derive the
 # file lists in StasisWamrFiles.cmake and the definitions below again, against what WAMR's own
-# build-scripts/runtime_lib.cmake would choose.
+# build-scripts/runtime_lib.cmake would choose. Then check what Stasis reads of WAMR beyond its API
+# against the new sources: the frames that src/wamr_frames.c reads, and the descriptions of traps
+# that src/trap.c maps to kinds.
 
 include_guard(GLOBAL)
 
@@ -28,14 +30,16 @@ else()
 endif()
 
 # Adds the object library `target`, which compiles WAMR as Stasis builds it, with the interpreter
-# STASIS_WAMR_INTERPRETER names. WAMR's printing goes to the function VPRINTF names, which takes a
-# format and a va_list as vprintf does, and its logging to stasis_wamr_log, which discards it.
+# STASIS_WAMR_INTERPRETER names, and `target`_frames, which reads WAMR's internals with the same
+# settings. WAMR's printing goes to the function VPRINTF names, which takes a format and a va_list as
+# vprintf does, and its logging to stasis_wamr_log, which discards it.
 #
 #   stasis_add_wamr(<target> VPRINTF <function>)
 #
 # WAMR builds as C99 with GNU extensions, as its own build does, since its interpreters use computed
 # goto and its Linux layer __thread. It keeps its own lenient warnings, never has them made errors,
-# and isn't checked by clang-tidy. None of its settings reach any other target.
+# and isn't checked by clang-tidy. None of its settings reach any other target, apart from its
+# definitions, which <target>_frames shares.
 function(stasis_add_wamr target)
     cmake_parse_arguments(PARSE_ARGV 1 arg "" "VPRINTF" "")
 
@@ -238,14 +242,27 @@ function(stasis_add_wamr target)
             $<$<COMPILE_LANG_AND_ID:ASM,Clang>:-Wno-unused-command-line-argument>
         )
     endif()
+
+    # The one source of Stasis's own that reads WAMR's internals, the frames it records when a call
+    # traps, as <target>_frames. It's compiled with WAMR's settings, so that it sees WAMR's structures
+    # as WAMR does, but as Stasis's own code, with WAMR's headers as system headers.
+    add_library(${target}_frames OBJECT
+        "${PROJECT_SOURCE_DIR}/src/wamr_frames.c"
+        "${PROJECT_SOURCE_DIR}/src/wamr_frames.h"
+    )
+    get_target_property(wamr_includes ${target} INCLUDE_DIRECTORIES)
+    target_include_directories(${target}_frames SYSTEM PRIVATE ${wamr_includes})
+    target_compile_definitions(${target}_frames PRIVATE ${definitions})
+    set_target_properties(${target}_frames PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    stasis_target_conventions(${target}_frames)
 endfunction()
 
 # Compiles WAMR into `target`, one of Stasis's own libraries, from the objects of `wamr`, an object
-# library stasis_add_wamr added. The target links the system libraries WAMR calls, and its own
-# sources can include WAMR's API, wasm_export.h, as a system header, which the strict warnings of
-# Stasis's own code don't apply to.
+# library stasis_add_wamr added, and of `wamr`_frames. The target links the system libraries WAMR
+# calls, and its own sources can include WAMR's API, wasm_export.h, as a system header, which the
+# strict warnings of Stasis's own code don't apply to.
 function(stasis_target_holds_wamr target wamr)
-    target_sources(${target} PRIVATE $<TARGET_OBJECTS:${wamr}>)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:${wamr}> $<TARGET_OBJECTS:${wamr}_frames>)
     target_include_directories(${target} SYSTEM PRIVATE "${STASIS_WAMR_DIR}/core/iwasm/include")
     target_compile_definitions(${target} PRIVATE WASM_RUNTIME_API_EXTERN=)
     if(CMAKE_SYSTEM_NAME STREQUAL "Windows")

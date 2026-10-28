@@ -4,10 +4,10 @@ Stasis is a game scripting library. It runs scripts compiled to WebAssembly in a
 game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, a host can load a script against its
-interface, learn whether it's snapshottable, create and start instances of it, and call their entry
-points with scalar arguments and results. The generator checks interface files and writes their
-host side and their WIT rendering. Host functions, strings, records, handles, the system interface,
-trap reports and snapshots are still to come.
+interface, learn whether it's snapshottable, create and start instances of it, call their entry
+points with scalar arguments and results, and read the trap report of an instance that traps. The
+generator checks interface files and writes their host side and their WIT rendering. Host
+functions, strings, records, handles, the system interface and snapshots are still to come.
 
 ## Requirements
 
@@ -173,7 +173,9 @@ cmake -DSOURCE=../wamr -P tools/vendor_wamr.cmake
 Upgrading WAMR is deliberate. Update its entry in `third_party/dependencies.json`, run the script on
 a checkout of the new release, and derive the file lists and the definitions in
 `cmake/StasisWamr.cmake` again, against what WAMR's own `build-scripts/runtime_lib.cmake` would
-choose.
+choose. Then check what Stasis reads of WAMR beyond its API against the new release's sources: the
+frames of a trap, which `src/wamr_frames.c` reads from WAMR's own structures, and the descriptions
+of traps that `src/trap.c` maps to kinds, which the trap tests pin.
 
 Configuring Stasis as the top-level project runs the licence check, `cmake/check_licenses.cmake`.
 It fails unless:
@@ -464,7 +466,22 @@ stasis_library_destroy(library);
   }
   ```
 - Creating an instance runs no script code. Starting runs the script's `stasis_initialize` once, if
-  it exports one, and only a started instance can be called. A call that traps returns
-  `STASIS_TRAP`, and the instance refuses every later call.
+  it exports one, and only a started instance can be called.
+- Starting an instance or calling it may trap, which returns `STASIS_TRAP` and ends the instance
+  for good: every later start or call is refused with `STASIS_REFUSED_TRAPPED`, and the host
+  recovers by creating another. Until it's destroyed, the instance keeps its trap report: the kind
+  of trap, whatever the backend, the backend's message, and the call stack, innermost frame first.
+  Each frame names its function by its index, and by its name if the module's name section gives
+  one. With the classic interpreter, each frame also has the offset in the module of the
+  instruction it was at: the one that trapped, or the call to the frame inside it. With the fast
+  interpreter, that's `STASIS_NO_OFFSET`.
+
+  ```c
+  if (acme_dungeon_npc_tick(instance, frame) == STASIS_TRAP) {
+      const stasis_trap *trap = stasis_instance_trap(instance);
+      /* trap->kind is STASIS_TRAP_KIND_UNREACHABLE when a C script calls abort(), and
+       * trap->frames holds the functions that were running, abort itself first */
+  }
+  ```
 - Objects are destroyed children first: destroying a script that has instances, or a library that
   has scripts, is refused with `STASIS_REFUSED_IN_USE`. Destroying null does nothing.

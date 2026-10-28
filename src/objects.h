@@ -7,6 +7,9 @@
 #include <stasis.h>
 #include <stasis_interface.h>
 
+#include "module.h"
+#include "trap.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -44,6 +47,9 @@ struct stasis_script {
     bool initializes;
     /* Why the script isn't snapshottable, one problem a line, or null when it is. */
     char *unsnapshottable;
+    /* Where the module's code is, which turns where WAMR says a frame of a trap report was into the
+     * instruction it was at. It's empty when WAMR doesn't say. */
+    struct module_code code;
     /* The number of the script's instances that haven't been destroyed. */
     size_t instance_count;
 };
@@ -67,6 +73,8 @@ struct stasis_instance {
     wasm_function_inst_t initialize;
     /* The function behind each entry point, by id, or null for one the script doesn't provide. */
     wasm_function_inst_t *entry_points;
+    /* The trap report, once the instance has trapped. */
+    struct trap_record trap;
 };
 
 #endif

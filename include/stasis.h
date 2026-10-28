@@ -475,6 +475,120 @@ STASIS_API stasis_status stasis_call(stasis_instance *instance,
                                      const stasis_interface *interface_data, uint32_t entry_point,
                                      const void *arguments, void *result);
 
+/**
+ * @brief What made a script instance trap, whatever the backend it ran on.
+ *
+ * A kind's number never changes and is never reused, but any minor release may add kinds, so a host
+ * handles kinds it doesn't know. So far only WebAssembly's own kinds can happen: Stasis's own come
+ * with host functions, handles and the system interface, which this release lacks.
+ */
+typedef enum stasis_trap_kind {
+    /**
+     * The script ran `unreachable`, as a C script's `abort()`, failed `assert` and
+     * `__builtin_trap()` do.
+     */
+    STASIS_TRAP_KIND_UNREACHABLE = 0,
+    /**
+     * The script read or wrote linear memory outside its bounds, as a C script that overflows its
+     * stack does.
+     */
+    STASIS_TRAP_KIND_MEMORY_OUT_OF_BOUNDS = 1,
+    /**
+     * An indirect call failed: its index was outside the table, the table's element there held no
+     * function, or held one of another type than the call expects.
+     */
+    STASIS_TRAP_KIND_BAD_INDIRECT_CALL = 2,
+    /** The script divided an integer by zero, or took the remainder of dividing by zero. */
+    STASIS_TRAP_KIND_INTEGER_DIVIDE_BY_ZERO = 3,
+    /**
+     * An integer division overflowed, or a float was converted to an integer type too small for it.
+     */
+    STASIS_TRAP_KIND_INTEGER_OVERFLOW = 4,
+    /** A NaN was converted to an integer. */
+    STASIS_TRAP_KIND_INVALID_CONVERSION = 5,
+    /**
+     * The script's calls nested too deep for its instance's stack, or for the native stack of the
+     * thread that called it.
+     */
+    STASIS_TRAP_KIND_STACK_EXHAUSTED = 6,
+    /** Any other trap of WebAssembly's, such as an access to a table outside its bounds. */
+    STASIS_TRAP_KIND_OTHER = 7,
+    /** A host function or hook aborted the call. */
+    STASIS_TRAP_KIND_HOST_ABORT = 8,
+    /**
+     * The script broke a rule of the boundary between it and the host, such as by passing a string
+     * that isn't UTF-8, or a handle it was never given.
+     */
+    STASIS_TRAP_KIND_BOUNDARY_VIOLATION = 9,
+    /**
+     * Stasis needed memory in the instance to hand the script a value, and the script's allocator
+     * had none.
+     */
+    STASIS_TRAP_KIND_ALLOCATION_FAILED = 10,
+    /** The instance needed a handle for a host object, and had none left. */
+    STASIS_TRAP_KIND_HANDLES_EXHAUSTED = 11,
+    /** The script exited, as a C script's `exit` does. */
+    STASIS_TRAP_KIND_EXIT = 12,
+    /** Not a kind. It makes the type 32 bits wide, as ::STASIS_STATUS_MAX_ENUM does. */
+    STASIS_TRAP_KIND_MAX_ENUM = 0x7FFFFFFF,
+} stasis_trap_kind;
+
+/**
+ * @brief The module offset of a frame whose backend can't say where in the module it was.
+ */
+#define STASIS_NO_OFFSET UINT32_MAX
+
+/**
+ * @brief One frame of a trapped call's stack: a function that was running when the call trapped.
+ */
+typedef struct stasis_trap_frame {
+    /**
+     * The function's index in the module's function index space, in which its imports come first.
+     */
+    uint32_t function_index;
+    /**
+     * The function's name in the module's name section, as NUL-terminated UTF-8, or null when the
+     * module has no name section or the section doesn't name it.
+     */
+    const char *function_name;
+    /**
+     * Where in the module's bytes the instruction the function was at starts: in the innermost
+     * frame, the instruction that trapped, and in every other, its call to the frame inside it.
+     * ::STASIS_NO_OFFSET when the backend can't say, as WAMR's fast interpreter never can.
+     */
+    uint32_t module_offset;
+} stasis_trap_frame;
+
+/**
+ * @brief A trap report: how a script instance trapped.
+ */
+typedef struct stasis_trap {
+    /** What made the instance trap. */
+    stasis_trap_kind kind;
+    /**
+     * What happened, in English, as NUL-terminated UTF-8: the backend's description of a trap of
+     * WebAssembly's own. Its wording may change in any release.
+     */
+    const char *message;
+    /** The number of frames. */
+    size_t frame_count;
+    /** The trapped call's stack, innermost frame first, or null when there are no frames. */
+    const stasis_trap_frame *frames;
+} stasis_trap;
+
+/**
+ * @brief The trap report of a script instance that has trapped.
+ *
+ * Starting an instance or calling one of its entry points can trap, and then returns ::STASIS_TRAP.
+ * A trap ends the instance for good: every later start or call is refused with
+ * ::STASIS_REFUSED_TRAPPED, and it can only have its report read, or be destroyed.
+ *
+ * @param instance The script instance.
+ * @return Its trap report, which stays valid and unchanged until the instance is destroyed, or null
+ * when it hasn't trapped, or `instance` is null.
+ */
+STASIS_API const stasis_trap *stasis_instance_trap(const stasis_instance *instance);
+
 #ifdef __cplusplus
 }
 #endif
