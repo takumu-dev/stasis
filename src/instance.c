@@ -6,6 +6,7 @@
 #include "descriptors.h"
 #include "objects.h"
 #include "platform.h"
+#include "trap.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -18,6 +19,7 @@ enum { WAMR_MESSAGE_SIZE = 128 };
 
 /* Frees an instance's own memory, once WAMR's part of it is destroyed. */
 static void free_instance(stasis_instance *instance) {
+    stasis_trap_record_free(&instance->trap);
     stasis_deallocate((void *)instance->entry_points);
     stasis_deallocate(instance);
 }
@@ -91,13 +93,15 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
 }
 
 /* Runs a function of a ready instance with the core arguments given, and its results. A call that
- * traps leaves the instance trapped. */
+ * traps leaves the instance trapped, with its trap report. */
 static stasis_status run(stasis_instance *instance, wasm_function_inst_t function,
                          uint32_t result_count, wasm_val_t *results, uint32_t argument_count,
                          wasm_val_t *arguments) {
     instance->state = INSTANCE_RUNNING;
     if (!wasm_runtime_call_wasm_a(instance->exec_env, function, result_count, results,
                                   argument_count, arguments)) {
+        stasis_trap_record_init(&instance->trap, instance->module_instance,
+                                &instance->script->code);
         instance->state = INSTANCE_TRAPPED;
         return STASIS_TRAP;
     }
@@ -216,4 +220,11 @@ stasis_status stasis_instance_destroy(stasis_instance *instance) {
 
 void *stasis_instance_user_data(const stasis_instance *instance) {
     return instance == NULL ? NULL : instance->user_data;
+}
+
+const stasis_trap *stasis_instance_trap(const stasis_instance *instance) {
+    if (instance == NULL || instance->state != INSTANCE_TRAPPED) {
+        return NULL;
+    }
+    return &instance->trap.report;
 }

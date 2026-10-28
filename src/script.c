@@ -10,6 +10,7 @@
 #include "platform.h"
 #include "signature.h"
 #include "snapshottable.h"
+#include "wamr_frames.h"
 
 #include <limits.h>
 #include <stdarg.h>
@@ -587,14 +588,16 @@ static void free_script(stasis_script *script) {
     }
     stasis_deallocate((void *)script->entry_points);
     stasis_deallocate(script->unsnapshottable);
+    stasis_module_code_free(&script->code);
     stasis_deallocate(script->bytes);
     stasis_deallocate(script);
 }
 
 /* Fills in what a script that has passed the load check keeps of the check: its identity, the
- * export name of each entry point it provides, and why it isn't snapshottable. Returns false if
- * there's no memory for it. */
-static bool keep_check(stasis_script *script, const struct load *load) {
+ * export name of each entry point it provides, why it isn't snapshottable, and where its code is,
+ * which the reader maps only if WAMR's trap reports need it. Returns false if there's no memory for
+ * it. */
+static bool keep_check(stasis_script *script, struct load *load) {
     memcpy(script->identity, load->module.identity, sizeof script->identity);
     script->entry_point_count = load->kind->entry_point_count;
     script->entry_points =
@@ -628,13 +631,16 @@ static bool keep_check(stasis_script *script, const struct load *load) {
         stasis_message_init(&reason, script->unsnapshottable, size);
         stasis_explain_unsnapshottable(&load->module, &reason);
     }
+    script->code = load->module.code;
+    memset(&load->module.code, 0, sizeof load->module.code);
     return true;
 }
 
 /* Loads the module into a script of its own, once the arguments have been checked. */
 static stasis_status load_script(stasis_library *library, struct load *load, const uint8_t *bytes,
                                  size_t size, stasis_script **script) {
-    const enum module_read read = stasis_module_read(&load->module, bytes, size);
+    const enum module_read read =
+        stasis_module_read(&load->module, bytes, size, stasis_wamr_frames_have_offsets());
     if (read == MODULE_READ_OUT_OF_MEMORY) {
         return STASIS_OUT_OF_MEMORY;
     }

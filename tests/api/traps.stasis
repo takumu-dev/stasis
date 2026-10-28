@@ -1,0 +1,32 @@
+/// Entry points that trap, each in its own way, which the tests of trap reports call.
+interface test:traps@1.0.0;
+
+script trapper {
+    /// Returns, so that a call can end without trapping.
+    optional fn returns();
+
+    /// Runs `unreachable`.
+    optional fn unreachable();
+    /// Loads from past the end of memory.
+    optional fn out_of_bounds();
+    /// Calls through a table index past the end of the table.
+    optional fn undefined_element();
+    /// Calls through a table element that holds no function.
+    optional fn uninitialized_element();
+    /// Calls through a table element that holds a function of another type.
+    optional fn type_mismatch();
+    /// Divides an integer by zero.
+    optional fn divide_by_zero();
+    /// Divides the most negative 32-bit integer by -1.
+    optional fn division_overflow();
+    /// Converts a float too large for a 32-bit integer to one.
+    optional fn conversion_overflow();
+    /// Converts a NaN to an integer.
+    optional fn invalid_conversion();
+    /// Reads a table element past the end of the table.
+    optional fn table_out_of_bounds();
+    /// Calls itself until the stack runs out.
+    optional fn recurse();
+    /// Calls a function that traps, each with its first instruction.
+    optional fn nested();
+}

@@ -568,16 +568,38 @@ static enum module_read read_elements(struct module *module, struct reader *read
     return MODULE_READ_OK;
 }
 
-/* Reads the body of the function at `function` in the function index space: its locals, and every
- * instruction of its code, noting the first use of each that changes a table or drops a
- * segment. */
-static void read_body(struct module *module, uint32_t function, struct reader *reader) {
+/* The offset in the module's bytes of `at`, which points into them. */
+static size_t offset_of(const struct module *module, const uint8_t *at) {
+    return (size_t)(at - module->bytes);
+}
+
+/* Notes that an instruction starts at `at`. */
+static void mark_instruction(struct module *module, const uint8_t *at) {
+    const size_t offset = offset_of(module, at);
+    module->code.instruction_starts[offset / 8] |= (uint8_t)(1U << (offset % 8));
+}
+
+/* Reads the body of the function at `function` in the function index space, the `defined`th the
+ * module defines: its locals, and every instruction of its code, noting the first use of each that
+ * changes a table or drops a segment, and if the reader maps the code, where the body's
+ * instructions start and end, and where each starts. */
+static void read_body(struct module *module, uint32_t function, uint32_t defined,
+                      struct reader *reader) {
     const uint32_t local_groups = read_count(reader, 2);
     for (uint32_t i = 0; i < local_groups; i++) {
         (void)read_u32(reader);
         (void)read_byte(reader);
     }
+    if (module->maps_code) {
+        /* A module larger than 4 GiB fails to load, so its offsets don't matter. */
+        struct module_body *body = &module->code.bodies[defined];
+        body->start = (uint32_t)offset_of(module, reader->at);
+        body->end = (uint32_t)offset_of(module, reader->end);
+    }
     while (!reader->failed && reader->at != reader->end) {
+        if (module->maps_code) {
+            mark_instruction(module, reader->at);
+        }
         const enum module_change change = read_immediates(reader, read_byte(reader));
         if (change != NO_CHANGE && !module->first_uses[change].used) {
             module->first_uses[change].used = true;
@@ -587,19 +609,34 @@ static void read_body(struct module *module, uint32_t function, struct reader *r
 }
 
 /* Reads the code section: each function's body. */
-static void read_code(struct module *module, struct reader *reader) {
+static enum module_read read_code(struct module *module, struct reader *reader) {
     const uint32_t count = read_count(reader, 3);
+    if (module->maps_code) {
+        struct module_code *code = &module->code;
+        code->function_import_count = module->function_import_count;
+        code->bodies = stasis_allocate_zeroed(count, sizeof *code->bodies);
+        code->instruction_starts =
+            stasis_allocate_zeroed((offset_of(module, reader->end) + 7) / 8, 1);
+        if (code->bodies == NULL || code->instruction_starts == NULL) {
+            return MODULE_READ_OUT_OF_MEMORY;
+        }
+        code->body_count = count;
+    }
     for (uint32_t i = 0; i < count; i++) {
         const uint32_t size = read_u32(reader);
         struct reader body;
         body.at = read_bytes(reader, size);
-        body.end = body.at == NULL ? NULL : body.at + size;
-        body.failed = body.at == NULL;
-        read_body(module, module->function_import_count + i, &body);
+        if (body.at == NULL) {
+            break;
+        }
+        body.end = body.at + size;
+        body.failed = false;
+        read_body(module, module->function_import_count + i, i, &body);
         if (body.failed) {
             reader->failed = true;
         }
     }
+    return MODULE_READ_OK;
 }
 
 /* Reads the data section: where each segment goes and how many bytes it holds. */
@@ -662,7 +699,7 @@ static enum module_read read_section(struct module *module, uint8_t id, struct r
         result = read_elements(module, reader);
         break;
     case SECTION_CODE:
-        read_code(module, reader);
+        result = read_code(module, reader);
         break;
     case SECTION_DATA:
         result = read_data(module, reader);
@@ -695,9 +732,12 @@ static void hash_section(stasis_sha256 *sha, uint8_t id, const uint8_t *contents
     stasis_sha256_update(sha, contents, size);
 }
 
-enum module_read stasis_module_read(struct module *module, const uint8_t *bytes, size_t size) {
+enum module_read stasis_module_read(struct module *module, const uint8_t *bytes, size_t size,
+                                    bool maps_code) {
     static const uint8_t preamble[8] = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
     memset(module, 0, sizeof *module);
+    module->bytes = bytes;
+    module->maps_code = maps_code;
     if (size < sizeof preamble || memcmp(bytes, preamble, sizeof preamble) != 0) {
         return MODULE_READ_MALFORMED;
     }
@@ -749,7 +789,35 @@ void stasis_module_free(struct module *module) {
     stasis_deallocate(module->exports);
     stasis_deallocate(module->element_segments);
     stasis_deallocate(module->data_segments);
+    stasis_module_code_free(&module->code);
     memset(module, 0, sizeof *module);
+}
+
+void stasis_module_code_free(struct module_code *code) {
+    stasis_deallocate(code->bodies);
+    stasis_deallocate(code->instruction_starts);
+    memset(code, 0, sizeof *code);
+}
+
+uint32_t stasis_module_instruction_before(const struct module_code *code, uint32_t function,
+                                          uint32_t offset) {
+    if (code->instruction_starts == NULL || function < code->function_import_count ||
+        function - code->function_import_count >= code->body_count) {
+        return STASIS_NO_OFFSET;
+    }
+    const struct module_body *body = &code->bodies[function - code->function_import_count];
+    if (offset <= body->start || offset > body->end) {
+        return STASIS_NO_OFFSET;
+    }
+    /* The body's first instruction starts at its start, so the search ends there at the latest. */
+    for (uint32_t at = offset - 1;; at--) {
+        if ((((unsigned)code->instruction_starts[at / 8] >> (at % 8)) & 1U) != 0) {
+            return at;
+        }
+        if (at == body->start) {
+            return STASIS_NO_OFFSET;
+        }
+    }
 }
 
 const char *stasis_module_type_name(uint8_t type) {
