@@ -9,40 +9,6 @@
 #include <string.h>
 #include <wasm_export.h>
 
-bool stasis_is_scalar(const stasis_value *value) {
-    switch (value->type) {
-    case STASIS_TYPE_U8:
-    case STASIS_TYPE_U16:
-    case STASIS_TYPE_U32:
-    case STASIS_TYPE_U64:
-    case STASIS_TYPE_S8:
-    case STASIS_TYPE_S16:
-    case STASIS_TYPE_S32:
-    case STASIS_TYPE_S64:
-    case STASIS_TYPE_F32:
-    case STASIS_TYPE_F64:
-    case STASIS_TYPE_BOOL:
-        return true;
-    case STASIS_TYPE_STRING:
-    case STASIS_TYPE_RECORD:
-    case STASIS_TYPE_HANDLE:
-    case STASIS_TYPE_MAX_ENUM:
-        break;
-    }
-    return false;
-}
-
-bool stasis_can_cross(const stasis_value *value) {
-    if (value->type == STASIS_TYPE_STRING) {
-        return true;
-    }
-    return stasis_is_scalar(value);
-}
-
-size_t stasis_flat_count(const stasis_value *value) {
-    return value->type == STASIS_TYPE_STRING ? 2 : 1;
-}
-
 /* The i32 with the same 32 bits as `bits`. */
 static int32_t i32_of(uint32_t bits) {
     int32_t value = 0;
@@ -233,6 +199,7 @@ size_t stasis_memory_size(const stasis_value *value) {
     case STASIS_TYPE_U32:
     case STASIS_TYPE_S32:
     case STASIS_TYPE_F32:
+    case STASIS_TYPE_HANDLE:
         return 4;
     case STASIS_TYPE_U64:
     case STASIS_TYPE_S64:
@@ -243,7 +210,6 @@ size_t stasis_memory_size(const stasis_value *value) {
     case STASIS_TYPE_S8:
     case STASIS_TYPE_BOOL:
     case STASIS_TYPE_RECORD:
-    case STASIS_TYPE_HANDLE:
     case STASIS_TYPE_MAX_ENUM:
         break;
     }
@@ -355,4 +321,22 @@ void stasis_load_scalar(const stasis_value *value, const unsigned char *at, void
         memcpy(&core.of, &narrow, sizeof narrow);
     }
     stasis_lift_scalar(value, &core, destination);
+}
+
+void stasis_store_scalar(const stasis_value *value, const void *source, unsigned char *at) {
+    /* The scalar as a core value of its own size, stored little-endian. */
+    wasm_val_t core;
+    stasis_lower_scalar(value, source, &core);
+    uint64_t bits = 0;
+    if (slot_size(core.kind) == sizeof bits) {
+        memcpy(&bits, &core.of, sizeof bits);
+    } else {
+        uint32_t narrow = 0;
+        memcpy(&narrow, &core.of, sizeof narrow);
+        bits = narrow;
+    }
+    const size_t size = stasis_memory_size(value);
+    for (size_t i = 0; i < size; i++) {
+        at[i] = (unsigned char)(bits >> (8 * i) & 0xff);
+    }
 }

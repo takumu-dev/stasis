@@ -1,0 +1,86 @@
+/// Host functions and entry points that pass records, which the tests of records call, and entry
+/// points through which the tests read and lay out the script's memory.
+interface test:records@1.0.0;
+
+group host {
+    record vec2 { x: f32, y: f32 }
+    /// The dungeon sample's `hit`, without its handle.
+    record hit { weapon: string, damage: u32, at: vec2 }
+    /// Fields of each size, each aligned as its type needs, so that there's padding between them,
+    /// and after them up to a multiple of 8 bytes.
+    record mixed { a: u8, b: u64, c: u16, d: bool, e: f32, f: s8 }
+    /// A record nested after a byte, which it's aligned past as strictly as its strictest field.
+    record outer { tag: u8, inner: mixed, last: s16 }
+    /// Two hits, with a string each.
+    record pair { left: hit, right: hit }
+    /// One value, which crosses as it would on its own.
+    record single { value: f64 }
+
+    /// Records its argument.
+    fn take_hit(blow: hit);
+    /// Records its arguments, which flatten into twenty core values, so that they spill into the
+    /// script's memory.
+    fn take_hits(a: hit, b: hit, c: hit, d: hit);
+    /// Each returns the record the test has set.
+    fn give_hit() -> hit;
+    fn give_outer() -> outer;
+    fn give_single() -> single;
+}
+
+script user {
+    uses host;
+
+    /// Calls `host.take_hit` with the string of `size` bytes at `weapon`, `damage`, `x` and `y`, as
+    /// they are.
+    optional fn pass_hit_at(weapon: u32, size: u32, damage: u32, x: f32, y: f32);
+
+    /// Passes its argument to `host.take_hit`.
+    optional fn pass_hit(blow: hit);
+    /// Each returns its argument.
+    optional fn echo_hit(blow: hit) -> hit;
+    optional fn echo_outer(value: outer) -> outer;
+    optional fn echo_pair(value: pair) -> pair;
+    optional fn echo_single(value: single) -> single;
+    /// Returns what `host.give_single` returns.
+    optional fn fetch_single() -> single;
+    /// Returns what `host.give_outer` returns, with each number in it one more and `d` negated.
+    optional fn fetch_outer() -> outer;
+    /// Passes its arguments to `host.take_hits`, as Stasis spilled them into the script's memory.
+    optional fn pass_hits(a: hit, b: hit, c: hit, d: hit);
+    /// Calls `host.take_hits` with its spilled arguments at `address`, as they are.
+    optional fn pass_hits_at(address: u32);
+    /// Returns `last`. Its arguments flatten into sixteen core values, so they don't spill.
+    optional fn sixteen(a: hit, b: hit, c: hit, last: u8) -> u8;
+    /// Returns the address its arguments spilled to.
+    optional fn seventeen(
+        a: u8, b: s16, c: u32, d: u64, e: f32, f: f64, g: bool, h: s64,
+        i: u16, j: s8, k: s32, l: u64, m: f32, n: f64, o: bool, p: u8, q: s64
+    ) -> u32;
+
+    /// Returns how many times the script's `cabi_post_*` functions have been called.
+    optional fn posts() -> u32;
+
+    /// Each returns `area` as its return area, as it is, for the test to have laid it out.
+    optional fn return_outer_at(area: u32) -> outer;
+    optional fn return_pair_at(area: u32) -> pair;
+
+    /// Each calls `host.give_<record>` with its return area at `area`, as it is.
+    optional fn fetch_hit_into(area: u32);
+    optional fn fetch_outer_into(area: u32);
+
+    /// Stores `value` at `address` in the script's memory, as 4 bytes, little-endian, or 1.
+    optional fn store(address: u32, value: u32);
+    optional fn store_byte(address: u32, value: u8);
+    /// Returns the 4 bytes at `address` in the script's memory, little-endian, or the byte.
+    optional fn load(address: u32) -> u32;
+    optional fn load_byte(address: u32) -> u8;
+
+    /// Sets what the script's `cabi_realloc` does once it has been called `after` more times, by a
+    /// number that the script's comments explain.
+    optional fn set_realloc(mode: u32, after: u32);
+    /// Returns how many times the script's `cabi_realloc` has been called, and the alignment and
+    /// size it was asked for in call `index`, from 0, of its first 16.
+    optional fn reallocs() -> u32;
+    optional fn realloc_alignment(index: u32) -> u32;
+    optional fn realloc_size(index: u32) -> u32;
+}

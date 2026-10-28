@@ -8,6 +8,7 @@
 #include <stasis_interface.h>
 
 #include "host_functions.h"
+#include "layout.h"
 #include "module.h"
 #include "trap.h"
 
@@ -50,6 +51,8 @@ struct stasis_script {
     /* The name of each entry point's cabi_post_*, by id, or null for one the script doesn't
      * export. */
     char **post_returns;
+    /* How each of the interface's entry points' values cross, by id. */
+    struct function_layout *entry_point_layouts;
     /* Whether the script exports stasis_initialize. */
     bool initializes;
     /* Why the script isn't snapshottable, one problem a line, or null when it is. */
@@ -97,7 +100,7 @@ struct stasis_instance {
     /* Which of those Stasis is inside of, and for a cabi_post_*, its entry point. */
     enum inside inside;
     const stasis_entry_point *post_returning;
-    /* The buffer that the last call's string results are copied into, and its size. */
+    /* The buffer that the strings in the last call's result are copied into, and its size. */
     unsigned char *results;
     size_t results_size;
     /* The room for a host function's arguments and result, while the instance calls one, which is

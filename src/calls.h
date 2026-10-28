@@ -4,7 +4,7 @@
  *
  * While Stasis is inside cabi_realloc or a cabi_post_*, the script may call no import, as the
  * canonical ABI's may_leave says. So Stasis's own calls nest at most one level deep: into
- * cabi_realloc, from a host function that returns a string.
+ * cabi_realloc, from a host function whose result holds a string.
  *
  * When a call traps, the instance's trap report is filled in at once, before any call it's nested
  * in unwinds, so that the report keeps the kind, the message and the frames of the first trap. */
@@ -16,6 +16,7 @@
 #include <stasis_interface.h>
 
 #include "descriptors.h"
+#include "layout.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -23,11 +24,14 @@
 #include <wasm_export.h>
 
 /* A value that Stasis puts into a script's memory, as messages name it: argument `position`, from
- * 1, of `entry_point`, or when that's null, the result of `host_function`. */
+ * 1, of `entry_point`, or all its arguments when `position` is 0, or when `entry_point` is null,
+ * the result of `host_function`. A value in a record names the record's fields that it's in by
+ * their `path`, as a layout's leaf does, which is null for a value in no record. */
 struct placed_value {
     const stasis_entry_point *entry_point;
     size_t position;
     const stasis_host_function *host_function;
+    const char *path;
 };
 
 /* Calls `function` in the running instance with the core arguments given, and its results. Returns
@@ -53,6 +57,14 @@ bool stasis_reallocate(stasis_instance *instance, const struct placed_value *val
  * as stasis_reallocate does. */
 bool stasis_place_string(stasis_instance *instance, const struct placed_value *value,
                          stasis_string string, uint32_t *address);
+
+/* Stores the values that `layout` lays out, from the C struct at `source`, into the running
+ * instance's memory, as the tuple at `address`, which is in memory and aligned. Each string goes
+ * into the memory as stasis_place_string puts it, and messages name it as part of `owner`, with
+ * its leaf's position and path. Returns false when the call is to end, as stasis_place_string
+ * does. */
+bool stasis_store_values(stasis_instance *instance, const struct layout *layout, const void *source,
+                         uint32_t address, const struct placed_value *owner);
 
 /* Calls `function`, the cabi_post_* of `entry_point`, in the running instance, with the core
  * results the entry point returned. Returns whether it returned. */

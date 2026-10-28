@@ -4,6 +4,7 @@
 #include "allocator.h"
 #include "descriptors.h"
 #include "host_functions.h"
+#include "layout.h"
 #include "message.h"
 #include "module.h"
 #include "names.h"
@@ -75,6 +76,7 @@ struct load {
     struct message *message;
     struct module module;
     struct descriptor_walk walk;
+    struct layout_builder layouts;
     /* How each import's module name and each export's name parsed, by index. */
     struct parsed_name *imports;
     struct parsed_name *exports;
@@ -641,8 +643,8 @@ static bool any_holds_string(struct load *load, const stasis_value *values, size
 
 /* The problem with cabi_realloc, if the script lacks it though Stasis needs it to put the result of
  * a host function it imports, or the arguments of an entry point it provides, into its memory,
- * which it does for each that holds a string. Returns false if the interface's descriptors are
- * malformed. */
+ * which it does for each that holds a string, and for arguments that spill. Returns false if the
+ * interface's descriptors are malformed. */
 static bool check_realloc_needed(struct load *load) {
     for (uint32_t i = 0; i < load->module.export_count; i++) {
         if (stasis_string_is(load->module.exports[i].name, STASIS_REALLOC_NAME)) {
@@ -672,11 +674,14 @@ static bool check_realloc_needed(struct load *load) {
             continue;
         }
         bool holds = false;
+        size_t flat_count = 0;
         if (!any_holds_string(load, entry_point->parameters, entry_point->parameter_count,
-                              &holds)) {
+                              &holds) ||
+            !stasis_flat_count(&load->walk, entry_point->parameters, entry_point->parameter_count,
+                               &flat_count)) {
             return false;
         }
-        if (holds) {
+        if (holds || flat_count > STASIS_MAX_FLAT_PARAMETERS) {
             problem(load, STASIS_INVALID_SCRIPT,
                     "the script lacks the export `" STASIS_REALLOC_NAME
                     "`, which Stasis needs to put the arguments of the entry point `%s.%s` into "
@@ -902,6 +907,7 @@ static stasis_status check(struct load *load) {
 /* Frees what a load allocated for itself. */
 static void free_load(struct load *load) {
     stasis_module_free(&load->module);
+    stasis_layout_builder_free(&load->layouts);
     stasis_walk_free(&load->walk);
     stasis_deallocate(load->imports);
     stasis_deallocate(load->exports);
@@ -935,6 +941,12 @@ static void free_script(stasis_script *script) {
     }
     stasis_deallocate((void *)script->entry_points);
     stasis_deallocate((void *)script->post_returns);
+    if (script->entry_point_layouts != NULL) {
+        for (size_t id = 0; id < script->entry_point_count; id++) {
+            stasis_function_layout_free(&script->entry_point_layouts[id]);
+        }
+    }
+    stasis_deallocate(script->entry_point_layouts);
     stasis_host_functions_free(&script->host_functions);
     stasis_deallocate(script->unsnapshottable);
     stasis_module_code_free(&script->code);
@@ -996,6 +1008,26 @@ static bool keep_check(stasis_script *script, struct load *load) {
     return true;
 }
 
+/* Lays out each of the interface's entry points for a script that has passed the load check, and
+ * so has its entry point count. Returns as stasis_function_layout_init does. */
+static stasis_status lay_out_entry_points(stasis_script *script, struct load *load) {
+    script->entry_point_layouts =
+        stasis_allocate_zeroed(script->entry_point_count, sizeof *script->entry_point_layouts);
+    if (script->entry_point_layouts == NULL) {
+        return STASIS_OUT_OF_MEMORY;
+    }
+    for (size_t id = 0; id < script->entry_point_count; id++) {
+        const stasis_entry_point *entry_point = &load->kind->entry_points[id];
+        const stasis_status status = stasis_function_layout_init(
+            &script->entry_point_layouts[id], &load->layouts, entry_point->parameters,
+            entry_point->parameter_count, entry_point->result);
+        if (status != STASIS_OK) {
+            return status;
+        }
+    }
+    return STASIS_OK;
+}
+
 /* Loads the module into a script of its own, once the arguments have been checked. */
 static stasis_status load_script(stasis_library *library, struct load *load, const uint8_t *bytes,
                                  size_t size, stasis_script **script) {
@@ -1021,12 +1053,13 @@ static stasis_status load_script(stasis_library *library, struct load *load, con
     if (size > 0) {
         memcpy(created->bytes, bytes, size);
     }
-    if (!stasis_walk_init(&load->walk, load->interface_data)) {
+    if (!stasis_walk_init(&load->walk, load->interface_data) ||
+        !stasis_layout_builder_init(&load->layouts, &load->walk)) {
         free_script(created);
         return STASIS_OUT_OF_MEMORY;
     }
     const stasis_status prepared =
-        stasis_host_functions_init(&created->host_functions, &load->walk);
+        stasis_host_functions_init(&created->host_functions, &load->layouts);
     if (prepared != STASIS_OK) {
         free_script(created);
         return prepared;
@@ -1062,6 +1095,9 @@ static stasis_status load_script(stasis_library *library, struct load *load, con
     }
     if (status == STASIS_OK && !keep_check(created, load)) {
         status = STASIS_OUT_OF_MEMORY;
+    }
+    if (status == STASIS_OK) {
+        status = lay_out_entry_points(created, load);
     }
 
     stasis_lock();

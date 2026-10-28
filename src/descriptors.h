@@ -1,6 +1,6 @@
 /* What the core derives from an interface's descriptors: the hash of each host function's and entry
  * point's signature, and the core WebAssembly types their values flatten to, as the canonical ABI
- * flattens them.
+ * flattens them, by walking each value, records and all, which layout.h does too.
  *
  * The descriptors are the host's constant data, which the core trusts to be as the generator
  * writes them. It still checks each index before it follows it, and that records don't hold
@@ -49,6 +49,26 @@ bool stasis_walk_init(struct descriptor_walk *walk, const stasis_interface *inte
 /* Frees what walking allocated. */
 void stasis_walk_free(struct descriptor_walk *walk);
 
+/* What a walk comes to as it goes through a value, in order: each value that isn't a record, and
+ * each record's start, its fields' names and its end, around what the record holds. */
+enum walk_event {
+    WALK_LEAF,
+    WALK_RECORD,
+    WALK_FIELD,
+    WALK_END,
+};
+
+/* Called for each event of a walk, with the value for WALK_LEAF and WALK_RECORD, which for a record
+ * is the value that holds it, and the field's name for WALK_FIELD. */
+typedef void walk_visit(void *context, enum walk_event event, const stasis_value *value,
+                        const char *name);
+
+/* Walks a value, calling `visit` for each event in order. A record's fields are walked in turn,
+ * and those of the records they hold within theirs, keeping the walk's place in each record on a
+ * stack. Returns false if the value's descriptors are malformed. */
+bool stasis_walk_value(struct descriptor_walk *walk, const stasis_value *value, walk_visit *visit,
+                       void *context);
+
 /* Writes the hash of an entry point's signature. Returns false if its descriptors are malformed. */
 bool stasis_entry_point_hash(struct descriptor_walk *walk, const stasis_entry_point *entry_point,
                              char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]);
@@ -61,6 +81,11 @@ bool stasis_host_function_hash(struct descriptor_walk *walk, const stasis_host_f
 /* Sets `holds` to whether a value holds a string, or is one. Returns false if its descriptors are
  * malformed. */
 bool stasis_holds_string(struct descriptor_walk *walk, const stasis_value *value, bool *holds);
+
+/* Sets `count` to the number of core values that the `value_count` values at `values` flatten to.
+ * Returns false if their descriptors are malformed. */
+bool stasis_flat_count(struct descriptor_walk *walk, const stasis_value *values, size_t value_count,
+                       size_t *count);
 
 /* A core function type, as the canonical ABI flattens a function's values: its parameters, or one
  * pointer to them past STASIS_MAX_FLAT_PARAMETERS, and its result, or past

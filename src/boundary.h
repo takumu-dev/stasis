@@ -1,6 +1,7 @@
 /* How values cross between the C structs that hold them on the host's side and the core values
  * that a script's functions take and return, or the script's memory, as the canonical ABI lowers
- * and lifts them. So far only scalars and strings cross. */
+ * and lifts them: scalars, and the strings' bytes. Records cross as the values they hold, which
+ * layout.h lays out. */
 
 #ifndef STASIS_BOUNDARY_H
 #define STASIS_BOUNDARY_H
@@ -15,16 +16,6 @@
 
 /* The most bytes a string may have, as the canonical ABI has it. */
 enum { STASIS_MAX_STRING_SIZE = 0x7FFFFFFF };
-
-/* Whether a value is a scalar: an integer, a float or a bool. */
-bool stasis_is_scalar(const stasis_value *value);
-
-/* Whether a value is of a type that can cross yet: a scalar or a string. */
-bool stasis_can_cross(const stasis_value *value);
-
-/* The number of core values that a value that can cross flattens to: one for a scalar, and two for
- * a string, its address in the script's memory and its size. */
-size_t stasis_flat_count(const stasis_value *value);
 
 /* Lowers the scalar at `value`'s offset in `source` into a core value: an integer of 32 bits or
  * fewer into an i32, extended by its sign if it has one, a bool into 0 or 1, and every other
@@ -41,9 +32,9 @@ void stasis_lift_scalar(const stasis_value *value, const wasm_val_t *core, void 
 void stasis_lift_raw_scalar(const stasis_value *value, const uint64_t *slot, void *destination);
 void stasis_lower_raw_scalar(const stasis_value *value, const void *source, uint64_t *slot);
 
-/* The number of bytes that a value that can cross takes in a script's memory, as the canonical ABI
- * lays it out, and its alignment there. A scalar is as aligned as it's large, and a string is its
- * address and its size, 4 bytes each. */
+/* The number of bytes that a value that isn't a record takes in a script's memory, as the canonical
+ * ABI lays it out, and its alignment there. A scalar is as aligned as it's large, a string is its
+ * address and its size, 4 bytes each, and a handle is its 4-byte value. */
 size_t stasis_memory_size(const stasis_value *value);
 size_t stasis_memory_alignment(const stasis_value *value);
 
@@ -83,5 +74,9 @@ enum string_fault stasis_check_host_string(stasis_string string, size_t *valid);
 /* Lifts the scalar that the canonical ABI stored in a script's memory at `at`, little-endian, into
  * the scalar at `value`'s offset in `destination`. A bool is true unless its byte is 0. */
 void stasis_load_scalar(const stasis_value *value, const unsigned char *at, void *destination);
+
+/* Lowers the scalar at `value`'s offset in `source` into a script's memory at `at`, as the
+ * canonical ABI stores it, little-endian, in as many bytes as stasis_memory_size says. */
+void stasis_store_scalar(const stasis_value *value, const void *source, unsigned char *at);
 
 #endif
