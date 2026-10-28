@@ -1,6 +1,6 @@
 /* What the tests of the C API share: the scripts the build makes from source, read as a host reads
- * them, and the steps that come before what a test checks. Each step fails the case when it
- * fails. */
+ * them, the steps that come before what a test checks, and threads. Each step fails the case when
+ * it fails. */
 
 #ifndef STASIS_TESTS_API_SUPPORT_H
 #define STASIS_TESTS_API_SUPPORT_H
@@ -35,5 +35,13 @@ stasis_instance *start_instance(stasis_script *script);
 
 /* Destroys an instance, its script and their library, each of which must succeed. */
 void destroy_all(stasis_instance *instance, stasis_script *script, stasis_library *library);
+
+/* Runs `body` with `argument` on a thread of its own, whose stack holds `stack_size` bytes, and
+ * waits for it to end. On Linux, the thread has no guard page below its stack, which WAMR would
+ * count as stack it keeps clear. */
+void run_on_thread(void (*body)(void *argument), void *argument, size_t stack_size);
+
+/* The lowest address of the calling thread's stack that it can use. */
+uintptr_t stack_end(void);
 
 #endif

@@ -1,19 +1,21 @@
 # Stasis's tests, each case a CTest test of its own:
 #
-#   generator.*  stasis-gen, through its command line
-#   harness.*    the harness's own checks
-#   headers.*    what the public headers include
-#   instances.*  creating, starting, calling and destroying script instances, through the C API
-#   libraries.*  creating and destroying libraries, through the C API
-#   library.*    what the built library holds, exports and references
-#   licenses.*   the licence check, on dependencies of its own
-#   load.*       loading scripts and the load check, through the C API
-#   printing.*   where WAMR's printing goes when a script traps, in the library and the test-only one
-#   scalars.*    scalars crossing to entry points and back, through the C API
-#   scripts.*    scripts built from source, as the tests build them
-#   sha256.*     SHA-256 against NIST's test vectors
-#   status.*     the status codes, through the C API
-#   traps.*      calls that trap, and the trap reports they leave, through the C API
+#   generator.*       stasis-gen, through its command line
+#   harness.*         the harness's own checks
+#   headers.*         what the public headers include
+#   host_functions.*  scripts calling host functions, through the C API
+#   instances.*       creating, starting, calling and destroying script instances, through the C API
+#   libraries.*       creating and destroying libraries, through the C API
+#   library.*         what the built library holds, exports and references
+#   licenses.*        the licence check, on dependencies of its own
+#   load.*            loading scripts and the load check, through the C API
+#   printing.*        where WAMR's printing goes when a script traps, in the library and the
+#                     test-only one
+#   scalars.*         scalars crossing to entry points and back, through the C API
+#   scripts.*         scripts built from source, as the tests build them
+#   sha256.*          SHA-256 against NIST's test vectors
+#   status.*          the status codes, through the C API
+#   traps.*           calls that trap, and the trap reports they leave, through the C API
 #
 # Every program is built on the harness in harness/. The scripts the tests run are built from source
 # with the pinned wasm-tools and wasi-sdk, so configuring the tests needs both. The build itself

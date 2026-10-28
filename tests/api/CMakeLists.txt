@@ -8,6 +8,7 @@
 #   instances.*      creating, starting, calling and destroying script instances
 #   memory.*         an instance's linear memory, zeroed when it's created and when it grows
 #   scalars.*        every scalar type, crossing to entry points and back
+#   host_functions.* scripts calling host functions, which the program defines
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
 #
@@ -19,6 +20,7 @@ stasis_generate(host calls.stasis OUTPUT_DIRECTORY generated VARIABLE calls_host
 stasis_generate(host early.stasis OUTPUT_DIRECTORY generated VARIABLE early_host)
 stasis_generate(host memory.stasis OUTPUT_DIRECTORY generated VARIABLE memory_host)
 stasis_generate(host traps.stasis OUTPUT_DIRECTORY generated VARIABLE traps_host)
+stasis_generate(host hosts.stasis OUTPUT_DIRECTORY generated VARIABLE hosts_host)
 
 set(scripts
     backend_exports
@@ -29,6 +31,10 @@ set(scripts
     early
     early_other_minor
     foreign_imports
+    host_bad_names
+    host_mismatches
+    host_wrong_types
+    hosts
     identity
     initialize_traps
     instructions
@@ -81,27 +87,40 @@ foreach(script IN ITEMS identity traps)
     add_dependencies(stasis_api_scripts stasis_script_${script}_stripped)
 endforeach()
 
-# Adds what the programs share, against `library`, the library or the test-only library, since a
-# program can't link both: the host sides, as the object library stasis_test_interfaces<suffix>,
-# and support.c, which reads the scripts from where the build makes them, as the static library
-# stasis_api_support<suffix>. The host sides are compiled as a host's compiler sees them: as C99,
-# with Stasis's own warnings but not clang-tidy, which is for Stasis's own code.
-function(stasis_add_api_support suffix library)
-    set(interfaces stasis_test_interfaces${suffix})
-    add_library(${interfaces} OBJECT ${calls_host} ${early_host} ${memory_host} ${traps_host})
-    target_include_directories(${interfaces} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_link_libraries(${interfaces} PUBLIC ${library})
-    set_target_properties(${interfaces} PROPERTIES
+# Adds the object library `target`, of the host sides that follow, against `library`. They're
+# compiled as a host's compiler sees them: as C99, with Stasis's own warnings but not clang-tidy,
+# which is for Stasis's own code.
+function(stasis_add_host_sides target library)
+    add_library(${target} OBJECT ${ARGN})
+    target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(${target} PUBLIC ${library})
+    set_target_properties(${target} PROPERTIES
         C_STANDARD 99
         C_STANDARD_REQUIRED ON
         C_EXTENSIONS OFF
         C_CLANG_TIDY ""
     )
-    stasis_target_warnings(${interfaces})
+    stasis_target_warnings(${target})
+endfunction()
+
+# Adds what the programs share, against `library`, the library or the test-only library, since a
+# program can't link both: the host sides, as the object library stasis_test_interfaces<suffix>,
+# and support.c, which reads the scripts from where the build makes them and runs threads, as the
+# static library stasis_api_support<suffix>.
+function(stasis_add_api_support suffix library)
+    set(interfaces stasis_test_interfaces${suffix})
+    stasis_add_host_sides(${interfaces} ${library}
+        ${calls_host} ${early_host} ${memory_host} ${traps_host}
+    )
 
     set(support stasis_api_support${suffix})
     add_library(${support} STATIC support.c support.h)
     target_link_libraries(${support} PUBLIC stasis_harness ${library} ${interfaces})
+    # pthread_getattr_np, which finds a thread's stack, is a GNU extension.
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        target_link_libraries(${support} PRIVATE Threads::Threads)
+        target_compile_definitions(${support} PRIVATE _GNU_SOURCE)
+    endif()
     target_compile_definitions(${support} PRIVATE STASIS_SCRIPTS_DIR="${STASIS_SCRIPTS_DIR}")
     add_dependencies(${support} stasis_api_scripts)
     stasis_target_conventions(${support})
@@ -114,6 +133,19 @@ foreach(program IN ITEMS libraries load snapshottable instances memory scalars t
     stasis_add_test(${program} ${program}_test.c)
     target_link_libraries(stasis_test_${program} PRIVATE stasis_api_support)
 endforeach()
+
+# The host side of hosts.stasis declares host functions, which only the program that defines them
+# links.
+stasis_add_host_sides(stasis_test_hosts_interface stasis::stasis ${hosts_host})
+stasis_add_test(host_functions host_functions_test.c)
+target_link_libraries(stasis_test_host_functions PRIVATE
+    stasis_api_support
+    stasis_test_hosts_interface
+)
+# A host function is sure of this much of the stack, which the program checks.
+target_compile_definitions(stasis_test_host_functions PRIVATE
+    STASIS_HOST_FUNCTION_STACK=${STASIS_HOST_FUNCTION_STACK}
+)
 
 # The load tests work out a script's identity apart from the library, with SHA-256 alone.
 target_link_libraries(stasis_test_load PRIVATE stasis_sha256)

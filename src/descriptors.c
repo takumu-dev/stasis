@@ -34,6 +34,60 @@ const stasis_script_kind *stasis_interface_script_kind(const stasis_interface *i
     return kind;
 }
 
+/* Whether a host function's or a method's descriptor has what calling it needs: a name, its
+ * parameters, and a thunk. */
+static bool host_function_usable(const stasis_host_function *function) {
+    if (function->name == NULL || function->thunk == NULL) {
+        return false;
+    }
+    if (function->parameter_count == 0) {
+        return true;
+    }
+    return function->parameters != NULL;
+}
+
+/* Whether every group, with its host functions, is there and has names. */
+static bool groups_usable(const stasis_interface *interface_data) {
+    if (interface_data->group_count > 0 && interface_data->groups == NULL) {
+        return false;
+    }
+    for (size_t g = 0; g < interface_data->group_count; g++) {
+        const stasis_group *group = &interface_data->groups[g];
+        if (group->name == NULL || (group->function_count > 0 && group->functions == NULL)) {
+            return false;
+        }
+        for (size_t i = 0; i < group->function_count; i++) {
+            if (!host_function_usable(&group->functions[i])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Whether every kind of host object, with its methods, is there, has names, and is in a group that
+ * is there. */
+static bool kinds_usable(const stasis_interface *interface_data) {
+    if (interface_data->kind_count > 0 && interface_data->kinds == NULL) {
+        return false;
+    }
+    for (size_t k = 0; k < interface_data->kind_count; k++) {
+        const stasis_object_kind *kind = &interface_data->kinds[k];
+        if (kind->name == NULL || kind->group >= interface_data->group_count) {
+            return false;
+        }
+        if (kind->method_count > 0 && kind->methods == NULL) {
+            return false;
+        }
+        for (size_t i = 0; i < kind->method_count; i++) {
+            if (!host_function_usable(&kind->methods[i])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool stasis_interface_usable(const stasis_interface *interface_data) {
     const stasis_script_kind *kind = stasis_interface_script_kind(interface_data);
     if (kind == NULL || kind->name == NULL) {
@@ -51,7 +105,10 @@ bool stasis_interface_usable(const stasis_interface *interface_data) {
             return false;
         }
     }
-    return true;
+    if (!groups_usable(interface_data)) {
+        return false;
+    }
+    return kinds_usable(interface_data);
 }
 
 bool stasis_walk_init(struct descriptor_walk *walk, const stasis_interface *interface_data) {
@@ -239,24 +296,39 @@ static void encode(void *context, enum walk_event event, const stasis_value *lea
     }
 }
 
-bool stasis_entry_point_hash(struct descriptor_walk *walk, const stasis_entry_point *entry_point,
-                             char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]) {
+/* Writes the hash of a function's signature: its parameters', and its result's, if it has one.
+ * Returns false if their descriptors are malformed. */
+static bool function_hash(struct descriptor_walk *walk, const stasis_value *parameters,
+                          size_t parameter_count, const stasis_value *result,
+                          char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]) {
     struct encoding encoding;
     encoding.interface_data = walk->interface_data;
     stasis_signature_init(&encoding.signature, NULL, 0);
-    for (size_t i = 0; i < entry_point->parameter_count; i++) {
-        if (!walk_value(walk, &entry_point->parameters[i], encode, &encoding)) {
+    for (size_t i = 0; i < parameter_count; i++) {
+        if (!walk_value(walk, &parameters[i], encode, &encoding)) {
             return false;
         }
     }
-    if (entry_point->result != NULL) {
+    if (result != NULL) {
         stasis_signature_begin_result(&encoding.signature);
-        if (!walk_value(walk, entry_point->result, encode, &encoding)) {
+        if (!walk_value(walk, result, encode, &encoding)) {
             return false;
         }
     }
     (void)stasis_signature_finish(&encoding.signature, hash);
     return true;
+}
+
+bool stasis_entry_point_hash(struct descriptor_walk *walk, const stasis_entry_point *entry_point,
+                             char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]) {
+    return function_hash(walk, entry_point->parameters, entry_point->parameter_count,
+                         entry_point->result, hash);
+}
+
+bool stasis_host_function_hash(struct descriptor_walk *walk, const stasis_host_function *function,
+                               char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]) {
+    return function_hash(walk, function->parameters, function->parameter_count, function->result,
+                         hash);
 }
 
 /* Values being flattened: the core types of as many as fit, and how many there are in all. */
@@ -304,39 +376,59 @@ static void flatten(void *context, enum walk_event event, const stasis_value *le
     }
 }
 
-bool stasis_entry_point_core_type(struct descriptor_walk *walk,
-                                  const stasis_entry_point *entry_point, struct core_type *type) {
-    struct flattening parameters;
-    parameters.types = type->parameters;
-    parameters.capacity = STASIS_MAX_FLAT_PARAMETERS;
-    parameters.count = 0;
-    for (size_t i = 0; i < entry_point->parameter_count; i++) {
-        if (!walk_value(walk, &entry_point->parameters[i], flatten, &parameters)) {
+/* Flattens a function's parameters and result into `type`: its parameters, or one pointer to them
+ * past STASIS_MAX_FLAT_PARAMETERS, and its result, which past STASIS_MAX_FLAT_RESULTS is a pointer
+ * that the function returns when `returns_area` is set, and that it takes as one more parameter
+ * otherwise. Returns false if their descriptors are malformed. */
+static bool function_core_type(struct descriptor_walk *walk, const stasis_value *parameters,
+                               size_t parameter_count, const stasis_value *result,
+                               bool returns_area, struct core_type *type) {
+    struct flattening flat_parameters;
+    flat_parameters.types = type->parameters;
+    flat_parameters.capacity = STASIS_MAX_FLAT_PARAMETERS;
+    flat_parameters.count = 0;
+    for (size_t i = 0; i < parameter_count; i++) {
+        if (!walk_value(walk, &parameters[i], flatten, &flat_parameters)) {
             return false;
         }
     }
-    if (parameters.count > STASIS_MAX_FLAT_PARAMETERS) {
+    if (flat_parameters.count > STASIS_MAX_FLAT_PARAMETERS) {
         type->parameters[0] = MODULE_I32;
-        parameters.count = 1;
+        flat_parameters.count = 1;
     }
-    type->parameter_count = (uint32_t)parameters.count;
+    type->parameter_count = (uint32_t)flat_parameters.count;
 
     type->result_count = 0;
-    if (entry_point->result != NULL) {
+    if (result != NULL) {
         struct flattening results;
         results.types = type->results;
         results.capacity = STASIS_MAX_FLAT_RESULTS;
         results.count = 0;
-        if (!walk_value(walk, entry_point->result, flatten, &results)) {
+        if (!walk_value(walk, result, flatten, &results)) {
             return false;
         }
-        if (results.count > STASIS_MAX_FLAT_RESULTS) {
+        if (results.count <= STASIS_MAX_FLAT_RESULTS) {
+            type->result_count = (uint32_t)results.count;
+        } else if (returns_area) {
             type->results[0] = MODULE_I32;
-            results.count = 1;
+            type->result_count = 1;
+        } else {
+            type->parameters[type->parameter_count++] = MODULE_I32;
         }
-        type->result_count = (uint32_t)results.count;
     }
     return true;
+}
+
+bool stasis_entry_point_core_type(struct descriptor_walk *walk,
+                                  const stasis_entry_point *entry_point, struct core_type *type) {
+    return function_core_type(walk, entry_point->parameters, entry_point->parameter_count,
+                              entry_point->result, true, type);
+}
+
+bool stasis_host_function_core_type(struct descriptor_walk *walk,
+                                    const stasis_host_function *function, struct core_type *type) {
+    return function_core_type(walk, function->parameters, function->parameter_count,
+                              function->result, false, type);
 }
 
 size_t stasis_value_size(const stasis_interface *interface_data, const stasis_value *value) {

@@ -172,6 +172,26 @@ bool stasis_parse_group_name(stasis_string text, struct wire_name *name) {
     return cursor.at == cursor.end;
 }
 
+bool stasis_parse_field_name(stasis_string text, struct field_name *name) {
+    memset(name, 0, sizeof *name);
+    struct cursor cursor;
+    cursor.at = text.data;
+    cursor.end = text.data + text.size;
+    if (text.size == 0 || !parse_snake_case(&cursor, &name->function)) {
+        return false;
+    }
+    if (take(&cursor, '.')) {
+        name->object = name->function;
+        if (!parse_snake_case(&cursor, &name->function)) {
+            return false;
+        }
+    }
+    if (!take(&cursor, ':') || !parse_hash(&cursor, &name->hash)) {
+        return false;
+    }
+    return cursor.at == cursor.end;
+}
+
 bool stasis_string_is(stasis_string text, const char *string) {
     const size_t length = strlen(string);
     if (text.size != length) {

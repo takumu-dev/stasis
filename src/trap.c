@@ -6,8 +6,11 @@
 #include "module.h"
 #include "wamr_frames.h"
 
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <wasm_export.h>
 
@@ -49,26 +52,65 @@ static stasis_trap_kind wamr_kind(const char *message) {
     return STASIS_TRAP_KIND_OTHER;
 }
 
+bool stasis_raise_trap(struct raised_trap *raised, stasis_trap_kind kind, const char *format, ...) {
+    if (raised->raised) {
+        return true;
+    }
+    raised->raised = true;
+    raised->kind = kind;
+    raised->message = NULL;
+    va_list arguments;
+    va_start(arguments, format);
+    const int length = vsnprintf(NULL, 0, format, arguments);
+    va_end(arguments);
+    if (length < 0) {
+        return false;
+    }
+    raised->message = stasis_allocate((size_t)length + 1);
+    if (raised->message == NULL) {
+        return false;
+    }
+    va_start(arguments, format);
+    (void)vsnprintf(raised->message, (size_t)length + 1, format, arguments);
+    va_end(arguments);
+    return true;
+}
+
+void stasis_raised_trap_clear(struct raised_trap *raised) {
+    stasis_deallocate(raised->message);
+    raised->raised = false;
+    raised->message = NULL;
+}
+
 void stasis_trap_record_init(struct trap_record *record, wasm_module_inst_t instance,
-                             const struct module_code *code) {
-    const char *message = wasm_runtime_get_exception(instance);
-    if (message == NULL) {
-        message = "";
-    }
-    if (strncmp(message, description_prefix, sizeof description_prefix - 1) == 0) {
-        message += sizeof description_prefix - 1;
-    }
+                             const struct module_code *code, const struct raised_trap *raised) {
     stasis_trap *report = &record->report;
-    report->kind = wamr_kind(message);
+    const char *message = NULL;
+    if (raised->raised) {
+        report->kind = raised->kind;
+        message = raised->message;
+    } else {
+        message = wasm_runtime_get_exception(instance);
+        if (message == NULL) {
+            message = "";
+        }
+        if (strncmp(message, description_prefix, sizeof description_prefix - 1) == 0) {
+            message += sizeof description_prefix - 1;
+        }
+        report->kind = wamr_kind(message);
+    }
     report->message = lost_message;
     report->frame_count = 0;
     report->frames = NULL;
 
     /* The frames and the message share one block, the frames first. Without the memory for it,
-     * the report keeps only its kind. */
+     * the report keeps only its kind, and without a raised trap's message, only its frames. */
     const uint32_t frame_count = stasis_wamr_frame_count(instance);
     const size_t frames_size = (size_t)frame_count * sizeof(stasis_trap_frame);
-    const size_t message_size = strlen(message) + 1;
+    const size_t message_size = message == NULL ? 0 : strlen(message) + 1;
+    if (frames_size + message_size == 0) {
+        return;
+    }
     record->memory = stasis_allocate(frames_size + message_size);
     if (record->memory == NULL) {
         return;
@@ -82,9 +124,11 @@ void stasis_trap_record_init(struct trap_record *record, wasm_module_inst_t inst
         frames[i].module_offset =
             stasis_module_instruction_before(code, recorded.function_index, recorded.end_offset);
     }
-    char *copy = (char *)record->memory + frames_size;
-    memcpy(copy, message, message_size);
-    report->message = copy;
+    if (message != NULL) {
+        char *copy = (char *)record->memory + frames_size;
+        memcpy(copy, message, message_size);
+        report->message = copy;
+    }
     report->frame_count = frame_count;
     report->frames = frame_count > 0 ? frames : NULL;
 }
