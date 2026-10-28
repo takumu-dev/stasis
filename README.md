@@ -495,9 +495,9 @@ A script calls the host functions its interface declares, which the host defines
 calls through the thunks in the host's side. Stasis lifts each argument from the script as the
 canonical ABI does it, and lowers the result back. Arguments that flatten into more than 16 core
 parameters spill into the script's memory, which Stasis reads them from, and a script that passes
-them outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. So far only
-scalars and strings cross, so a script that calls a host function that takes or returns a record or
-a handle traps.
+them outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. So far
+handles don't cross, so a script that calls a host function that takes or returns one, in a record
+or not, traps.
 
 - A host function ends the call it's part of with `stasis_abort`. It then returns as it would
   otherwise, Stasis ignores its result, and the call traps as `STASIS_TRAP_KIND_HOST_ABORT`, with
@@ -571,3 +571,39 @@ Stasis puts a string into the script's memory, it allocates it there with the sc
   them traps, the call into the instance traps with that trap's kind, message and frames.
 - `cabi_realloc` can grow the script's memory, which can move it, so Stasis takes where the memory
   is afresh after each call to it.
+
+### Records
+
+A record crosses as the canonical ABI lays it out: flattened into the values it holds, in order,
+those of the records nested in it included, and in the script's memory as its fields, in order,
+each aligned as its type needs. A record is as aligned as its strictest field, and padded to a
+multiple of that. On the host's side it's the struct that the generator writes, passed and returned
+by value.
+
+```c
+acme_dungeon_world_vec2 acme_dungeon_world_entity_position(stasis_instance *instance,
+                                                           acme_dungeon_world_entity *self) {
+    acme_dungeon_world_vec2 position = {self->x, self->y};
+    return position;
+}
+```
+
+- A function's values flatten into at most 16 core parameters. Past that, an entry point's
+  arguments spill into the script's memory, as a host function's do: Stasis allocates a tuple of
+  them with the script's `cabi_realloc` and lays them out in it, and then puts each string they hold
+  into memory, in order. A script that provides an entry point whose arguments spill has to export
+  `cabi_realloc`, even when they hold no string.
+- A result that flattens into more than one core value goes through a return area. A script that
+  calls a host function passes the address of an area of its own after the arguments, which Stasis
+  checks before the host function runs, and an entry point returns the address of one it owns. A
+  record that flattens into one core value, such as one that holds a single `f64`, crosses as that
+  value.
+- A string in a record follows the rules for strings above. In a host function's argument, it
+  points into the script's memory until the host function returns. In a host function's result,
+  every string is checked before any of them goes into the script's memory. In an entry point's
+  result, every string is copied into the instance's buffer before its `cabi_post_` runs.
+- Spilled arguments and a return area that are outside the script's memory, or misaligned, trap as
+  `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. A message names a string in a record by the fields it's in,
+  outermost first and joined by dots, as in "the field `weapon` of argument 1 of `combat.alarm`".
+- So far handles don't cross, so a call to an entry point that takes or returns one, in a record or
+  not, is refused with `STASIS_INVALID_ARGUMENT`.

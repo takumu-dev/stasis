@@ -13,8 +13,9 @@
  * destroyed.
  *
  * The trampoline lifts the script's arguments into the host function's argument struct, calls its
- * thunk, and lowers the result. So far only scalars and strings cross, so a host function that
- * takes or returns anything else isn't registered, and a script that calls one traps. */
+ * thunk, and lowers the result, as the host function's layout lays them out. So far handles don't
+ * cross, so a host function that takes or returns one, in a record or not, isn't registered, and a
+ * script that calls one traps. */
 
 #ifndef STASIS_HOST_FUNCTIONS_H
 #define STASIS_HOST_FUNCTIONS_H
@@ -23,12 +24,20 @@
 #include <stasis_interface.h>
 
 #include "descriptors.h"
+#include "layout.h"
 
 #include <lib_export.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <wasm_export.h>
+
+/* A host function or method as a script links it: its descriptor, and how its values cross. The
+ * trampoline that WAMR calls in its place has it as its attachment. */
+struct linked_function {
+    const stasis_host_function *descriptor;
+    struct function_layout layout;
+};
 
 /* The host functions of one group, as WAMR links them: the group's module name, and a symbol for
  * each host function and method, which WAMR sorts in place. */
@@ -38,6 +47,8 @@ struct host_group {
     uint32_t symbol_count;
     /* The symbols' names, one after another. */
     char *names;
+    /* What the symbols are attached to, in the order they were added. */
+    struct linked_function *functions;
 };
 
 /* A script's copy of its interface's host functions, and the room an instance keeps for calling
@@ -49,11 +60,11 @@ struct host_functions {
     size_t result_offset;
 };
 
-/* Makes the copy of the host functions of the interface that `walk` walks. Returns STASIS_OK,
+/* Makes the copy of the host functions of the interface that `layouts` lays out. Returns STASIS_OK,
  * STASIS_OUT_OF_MEMORY, or STASIS_INVALID_ARGUMENT if the interface's descriptors are malformed.
  * Whatever it returns, `functions` must be freed with stasis_host_functions_free. */
 stasis_status stasis_host_functions_init(struct host_functions *functions,
-                                         struct descriptor_walk *walk);
+                                         struct layout_builder *layouts);
 
 /* Registers the host functions with WAMR, under Stasis's lock, for a load. Returns false if WAMR
  * had no memory for them, having registered none. */

@@ -250,8 +250,8 @@ TEST(calls_a_host_function_of_each_group) {
     stop(running);
 }
 
-/* So far only scalars cross, so a host function that takes a handle, such as a method, can be
- * imported but not called, and calling it traps. */
+/* So far handles don't cross, so a host function that takes one, such as a method, can be imported
+ * but not called, and calling it traps. */
 TEST(a_host_function_that_takes_a_handle_cant_be_called_yet) {
     const struct running running = start_hosts();
     ASSERT_INT_EQ(test_hosts_caller_poke(running.instance), STASIS_TRAP);

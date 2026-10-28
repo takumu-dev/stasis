@@ -10,11 +10,12 @@
 #   scalars.*        every scalar type, crossing to entry points and back
 #   host_functions.* scripts calling host functions, which the program defines
 #   strings.*        strings crossing both ways, and the load check of what that needs
+#   records.*        records crossing both ways, flat, spilled and in return areas
 #   allocations.*    what calls with strings allocate, which the test-only library counts
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
 #
-# Every script is a WAT module in scripts/, apart from two C scripts, and each says what it's for.
+# Every script is a WAT module in scripts/, apart from three C scripts, and each says what it's for.
 # Their names carry the hashes of the test interfaces' signatures, as `stasis-gen signatures` prints
 # them.
 
@@ -24,6 +25,7 @@ stasis_generate(host memory.stasis OUTPUT_DIRECTORY generated VARIABLE memory_ho
 stasis_generate(host traps.stasis OUTPUT_DIRECTORY generated VARIABLE traps_host)
 stasis_generate(host hosts.stasis OUTPUT_DIRECTORY generated VARIABLE hosts_host)
 stasis_generate(host strings.stasis OUTPUT_DIRECTORY generated VARIABLE strings_host)
+stasis_generate(host records.stasis OUTPUT_DIRECTORY generated VARIABLE records_host)
 
 set(scripts
     abi_exports_wrong_types
@@ -54,10 +56,14 @@ set(scripts
     other_interface
     other_interface_import
     other_signature
+    realloc_missing_for_a_record
     realloc_missing_for_a_result
     realloc_missing_for_an_argument
+    realloc_missing_for_spilled_arguments
     realloc_not_a_function
     realloc_not_needed
+    realloc_not_needed_for_records
+    records
     reference_globals
     segments_dont_fit
     segments_fit
@@ -78,7 +84,7 @@ foreach(script IN LISTS scripts)
 endforeach()
 
 # C scripts, built as a script author builds one, whose code is a compiler's.
-foreach(script IN ITEMS c_script c_strings)
+foreach(script IN ITEMS c_records c_script c_strings)
     stasis_add_c_script(${script} scripts/${script}.c)
     add_dependencies(stasis_api_scripts stasis_script_${script})
 endforeach()
@@ -172,6 +178,14 @@ stasis_add_test(allocations allocations_test.c string_hosts.c string_hosts.h tes
 target_link_libraries(stasis_test_allocations PRIVATE
     stasis_api_support_testing
     stasis_test_strings_interface_testing
+)
+
+# So does the host side of records.stasis, whose host functions the program of records defines.
+stasis_add_host_sides(stasis_test_records_interface stasis::stasis ${records_host})
+stasis_add_test(records records_test.c)
+target_link_libraries(stasis_test_records PRIVATE
+    stasis_api_support
+    stasis_test_records_interface
 )
 
 # The load tests work out a script's identity apart from the library, with SHA-256 alone.

@@ -6,6 +6,7 @@
 #include "allocator.h"
 #include "boundary.h"
 #include "descriptors.h"
+#include "layout.h"
 /* NOLINTNEXTLINE(misc-include-cleaner): it defines the struct that stasis.h's type names */
 #include "objects.h"
 #include "trap.h"
@@ -34,18 +35,24 @@ void stasis_keep_trap(stasis_instance *instance) {
     }
 }
 
-/* Writes how messages name `value`, as in "argument 1 of `npc.greet`" or "the result of
- * `world.name`", into the `size` bytes at `buffer`, as snprintf does. */
+/* Writes how messages name `value`, as in "argument 1 of `npc.greet`", "the arguments of
+ * `npc.greet`", "the result of `world.name`" or "the field `weapon` of the result of
+ * `combat.last_hit`", into the `size` bytes at `buffer`, as snprintf does. */
 static int print_description(char *buffer, size_t size, const stasis_interface *interface_data,
                              const struct placed_value *value) {
+    if (value->entry_point != NULL && value->position == 0) {
+        return snprintf(buffer, size, "the arguments of `%s.%s`", interface_data->scripts[0].name,
+                        value->entry_point->name);
+    }
     if (value->entry_point != NULL) {
-        return snprintf(buffer, size, "argument %lu of `%s.%s`", (unsigned long)value->position,
+        return snprintf(buffer, size, FIELD_FORMAT "argument %lu of `%s.%s`",
+                        FIELD_ARGUMENTS(value->path), (unsigned long)value->position,
                         interface_data->scripts[0].name, value->entry_point->name);
     }
     const struct host_function_name name =
         stasis_host_function_name(interface_data, value->host_function);
-    return snprintf(buffer, size, "the result of " HOST_FUNCTION_NAME_FORMAT,
-                    HOST_FUNCTION_NAME_ARGUMENTS(name));
+    return snprintf(buffer, size, FIELD_FORMAT "the result of " HOST_FUNCTION_NAME_FORMAT,
+                    FIELD_ARGUMENTS(value->path), HOST_FUNCTION_NAME_ARGUMENTS(name));
 }
 
 /* Writes how messages name `value` into a block of its own, which stasis_deallocate frees. Returns
@@ -128,6 +135,33 @@ bool stasis_place_string(stasis_instance *instance, const struct placed_value *v
     if (string.size > 0) {
         const struct script_memory memory = stasis_script_memory(instance->module_instance);
         memcpy(memory.base + *address, string.data, string.size);
+    }
+    return true;
+}
+
+bool stasis_store_values(stasis_instance *instance, const struct layout *layout, const void *source,
+                         uint32_t address, const struct placed_value *owner) {
+    for (size_t i = 0; i < layout->leaf_count; i++) {
+        const struct leaf *leaf = &layout->leaves[i];
+        if (leaf->value.type != STASIS_TYPE_STRING) {
+            const struct script_memory memory = stasis_script_memory(instance->module_instance);
+            stasis_store_scalar(&leaf->value, source, memory.base + address + leaf->memory_offset);
+            continue;
+        }
+        struct placed_value value = *owner;
+        value.position = leaf->position;
+        value.path = leaf->path;
+        stasis_string string;
+        memcpy(&string, (const unsigned char *)source + leaf->value.offset, sizeof string);
+        uint32_t data = 0;
+        if (!stasis_place_string(instance, &value, string, &data)) {
+            return false;
+        }
+        /* cabi_realloc may have grown the memory, and moved it, but the tuple is still in it. */
+        const struct script_memory memory = stasis_script_memory(instance->module_instance);
+        unsigned char *at = memory.base + address + leaf->memory_offset;
+        stasis_store_u32(at, data);
+        stasis_store_u32(at + 4, (uint32_t)string.size);
     }
     return true;
 }

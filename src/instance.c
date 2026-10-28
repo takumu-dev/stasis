@@ -5,6 +5,7 @@
 #include "boundary.h"
 #include "calls.h"
 #include "descriptors.h"
+#include "layout.h"
 #include "objects.h"
 #include "platform.h"
 #include "trap.h"
@@ -160,55 +161,63 @@ stasis_status stasis_instance_start(stasis_instance *instance) {
     return leave(instance, stasis_invoke(instance, instance->initialize, 0, NULL, 0, NULL));
 }
 
-/* Whether the host's arguments to an entry point can cross: each is a value that can cross, and
- * every string can, and they flatten into no more core values than an entry point can take. Past
- * that, they'd spill into the script's memory, which they can't yet. */
-static bool arguments_cross(const stasis_entry_point *descriptor, const void *arguments) {
-    size_t flat_count = 0;
-    for (size_t i = 0; i < descriptor->parameter_count; i++) {
-        const stasis_value *parameter = &descriptor->parameters[i];
-        if (!stasis_can_cross(parameter)) {
-            return false;
-        }
-        if (parameter->type == STASIS_TYPE_STRING) {
-            stasis_string string;
-            memcpy(&string, (const unsigned char *)arguments + parameter->offset, sizeof string);
-            size_t valid = 0;
-            if (stasis_check_host_string(string, &valid) != STRING_CROSSES) {
-                return false;
-            }
-        }
-        flat_count += stasis_flat_count(parameter);
-    }
-    return flat_count <= STASIS_MAX_FLAT_PARAMETERS;
-}
-
-/* Lowers the host's arguments to an entry point into the core values at `core`, putting each
- * string into the running instance's memory, and sets `count` to the number of core values. Returns
- * false when the call is to end, as stasis_place_string does. */
-static bool lower_arguments(stasis_instance *instance, const stasis_entry_point *descriptor,
-                            const void *arguments, wasm_val_t *core, uint32_t *count) {
-    size_t slot = 0;
-    for (size_t i = 0; i < descriptor->parameter_count; i++) {
-        const stasis_value *parameter = &descriptor->parameters[i];
-        if (parameter->type != STASIS_TYPE_STRING) {
-            stasis_lower_scalar(parameter, arguments, &core[slot++]);
+/* Whether each string among the host's arguments to an entry point can cross. */
+static bool strings_cross(const struct layout *parameters, const void *arguments) {
+    for (size_t i = 0; i < parameters->leaf_count; i++) {
+        const struct leaf *leaf = &parameters->leaves[i];
+        if (leaf->value.type != STASIS_TYPE_STRING) {
             continue;
         }
         stasis_string string;
-        memcpy(&string, (const unsigned char *)arguments + parameter->offset, sizeof string);
-        const struct placed_value value = {descriptor, i + 1, NULL};
+        memcpy(&string, (const unsigned char *)arguments + leaf->value.offset, sizeof string);
+        size_t valid = 0;
+        if (stasis_check_host_string(string, &valid) != STRING_CROSSES) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Lowers the host's arguments to an entry point into the core values at `core`, putting each
+ * string into the running instance's memory, and sets `count` to the number of core values.
+ * Arguments that flatten into more core values than an entry point can take spill into the memory,
+ * as a tuple that Stasis allocates there with the script's cabi_realloc, and the core value is its
+ * address. Returns false when the call is to end, as stasis_reallocate does. */
+static bool lower_arguments(stasis_instance *instance, const stasis_entry_point *descriptor,
+                            const struct layout *parameters, const void *arguments,
+                            wasm_val_t *core, uint32_t *count) {
+    const stasis_value u32 = {STASIS_TYPE_U32, 0, 0};
+    if (parameters->flat_count > STASIS_MAX_FLAT_PARAMETERS) {
+        const struct placed_value tuple = {descriptor, 0, NULL, NULL};
+        uint32_t address = 0;
+        if (!stasis_reallocate(instance, &tuple, (uint32_t)parameters->memory_alignment,
+                               (uint32_t)parameters->memory_size, &address) ||
+            !stasis_store_values(instance, parameters, arguments, address, &tuple)) {
+            return false;
+        }
+        stasis_lower_scalar(&u32, &address, &core[0]);
+        *count = 1;
+        return true;
+    }
+    for (size_t i = 0; i < parameters->leaf_count; i++) {
+        const struct leaf *leaf = &parameters->leaves[i];
+        if (leaf->value.type != STASIS_TYPE_STRING) {
+            stasis_lower_scalar(&leaf->value, arguments, &core[leaf->slot]);
+            continue;
+        }
+        stasis_string string;
+        memcpy(&string, (const unsigned char *)arguments + leaf->value.offset, sizeof string);
+        const struct placed_value value = {descriptor, leaf->position, NULL, leaf->path};
         uint32_t address = 0;
         if (!stasis_place_string(instance, &value, string, &address)) {
             return false;
         }
         /* A string flattens into its address and size, each a u32. */
         const uint32_t size = (uint32_t)string.size;
-        const stasis_value u32 = {STASIS_TYPE_U32, 0, 0};
-        stasis_lower_scalar(&u32, &address, &core[slot++]);
-        stasis_lower_scalar(&u32, &size, &core[slot++]);
+        stasis_lower_scalar(&u32, &address, &core[leaf->slot]);
+        stasis_lower_scalar(&u32, &size, &core[leaf->slot + 1]);
     }
-    *count = (uint32_t)slot;
+    *count = (uint32_t)parameters->flat_count;
     return true;
 }
 
@@ -232,71 +241,126 @@ static bool reserve_results(stasis_instance *instance, size_t size) {
     return true;
 }
 
-/* How a string result fared as Stasis lifted it. */
+/* How an entry point's result fared as Stasis lifted it. */
 enum lifted {
     RESULT_LIFTED,
     RESULT_LIFTED_BUT_NO_MEMORY,
     RESULT_NOT_LIFTED,
 };
 
-/* Lifts the string that an entry point returned in the return area at `area` in the script's
- * memory, copying its bytes into the instance's buffer for results, into the stasis_string at
- * `result`. Returns RESULT_NOT_LIFTED, having raised a boundary violation, if the area or the
- * string isn't all in memory, the area is misaligned, or the string isn't UTF-8, and
- * RESULT_LIFTED_BUT_NO_MEMORY,
- * leaving the result alone, if there's no memory for the buffer. */
-static enum lifted lift_string_result(stasis_instance *instance,
-                                      const stasis_entry_point *descriptor, uint32_t area,
-                                      void *result) {
+/* Checks the string of `size` bytes at `address` in the script's memory, as it is now, that is
+ * `leaf` of an entry point's result. Returns false, having raised a boundary violation, if it isn't
+ * all in the memory, or isn't UTF-8. */
+static bool check_result_string(stasis_instance *instance, const stasis_entry_point *descriptor,
+                                const struct leaf *leaf, struct script_memory memory,
+                                uint32_t address, uint32_t size) {
     const char *kind = instance->script->interface_data->scripts[0].name;
-    const struct script_memory memory = stasis_script_memory(instance->module_instance);
-    const stasis_value string_type = {STASIS_TYPE_STRING, 0, 0};
-    const size_t alignment = stasis_memory_alignment(&string_type);
-    const size_t area_size = stasis_memory_size(&string_type);
-    if (area % alignment != 0) {
-        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
-                                "the entry point `%s.%s` returned its result at %lu in the "
-                                "script's memory, which isn't a multiple of its alignment, %lu",
-                                kind, descriptor->name, (unsigned long)area,
-                                (unsigned long)alignment);
-        return RESULT_NOT_LIFTED;
-    }
-    if ((uint64_t)area + area_size > memory.size) {
-        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
-                                "the entry point `%s.%s` returned its result at %lu in the "
-                                "script's memory, where its %lu bytes run past its end at %llu",
-                                kind, descriptor->name, (unsigned long)area,
-                                (unsigned long)area_size, (unsigned long long)memory.size);
-        return RESULT_NOT_LIFTED;
-    }
-    const uint32_t address = stasis_load_u32(memory.base + area);
-    const uint32_t size = stasis_load_u32(memory.base + area + 4);
     if ((uint64_t)address + size > memory.size) {
         (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
-                                "the entry point `%s.%s` returned a string at %lu in the script's "
-                                "memory, where its %lu bytes run past its end at %llu",
-                                kind, descriptor->name, (unsigned long)address, (unsigned long)size,
+                                "the entry point `%s.%s` returned " FIELD_FORMAT
+                                "a string at %lu in the script's memory, where its %lu bytes run "
+                                "past its end at %llu",
+                                kind, descriptor->name, RESULT_FIELD_ARGUMENTS(leaf->path),
+                                (unsigned long)address, (unsigned long)size,
                                 (unsigned long long)memory.size);
-        return RESULT_NOT_LIFTED;
+        return false;
     }
     const size_t valid = stasis_utf8_length(memory.base + address, size);
     if (valid < size) {
         (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
-                                "the entry point `%s.%s` returned a string of %lu bytes that isn't "
-                                "UTF-8, from offset %lu",
-                                kind, descriptor->name, (unsigned long)size, (unsigned long)valid);
+                                "the entry point `%s.%s` returned " FIELD_FORMAT
+                                "a string of %lu bytes that isn't UTF-8, from offset %lu",
+                                kind, descriptor->name, RESULT_FIELD_ARGUMENTS(leaf->path),
+                                (unsigned long)size, (unsigned long)valid);
+        return false;
+    }
+    return true;
+}
+
+/* Lifts the result that an entry point returned in the return area at `area` in the script's
+ * memory into `result`, copying the bytes of each string it holds into the instance's buffer for
+ * results. Returns RESULT_NOT_LIFTED, having raised a boundary violation, if the area isn't all in
+ * memory or is misaligned, or a string isn't all in memory or isn't UTF-8, and
+ * RESULT_LIFTED_BUT_NO_MEMORY, leaving the result alone, if there's no memory for the buffer. */
+static enum lifted lift_from_area(stasis_instance *instance, const stasis_entry_point *descriptor,
+                                  const struct layout *results, uint32_t area, void *result) {
+    const char *kind = instance->script->interface_data->scripts[0].name;
+    const struct script_memory memory = stasis_script_memory(instance->module_instance);
+    if (area % results->memory_alignment != 0) {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the entry point `%s.%s` returned its result at %lu in the "
+                                "script's memory, which isn't a multiple of its alignment, %lu",
+                                kind, descriptor->name, (unsigned long)area,
+                                (unsigned long)results->memory_alignment);
         return RESULT_NOT_LIFTED;
     }
-    if (!reserve_results(instance, size)) {
+    if ((uint64_t)area + results->memory_size > memory.size) {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the entry point `%s.%s` returned its result at %lu in the "
+                                "script's memory, where its %lu bytes run past its end at %llu",
+                                kind, descriptor->name, (unsigned long)area,
+                                (unsigned long)results->memory_size,
+                                (unsigned long long)memory.size);
+        return RESULT_NOT_LIFTED;
+    }
+
+    /* Every string is checked first, and the buffer made room for all of them, unless together
+     * they're more bytes than a size can count. */
+    const unsigned char *tuple = memory.base + area;
+    size_t total = 0;
+    bool countable = true;
+    for (size_t i = 0; i < results->leaf_count; i++) {
+        const struct leaf *leaf = &results->leaves[i];
+        if (leaf->value.type != STASIS_TYPE_STRING) {
+            continue;
+        }
+        const unsigned char *at = tuple + leaf->memory_offset;
+        const uint32_t size = stasis_load_u32(at + 4);
+        if (!check_result_string(instance, descriptor, leaf, memory, stasis_load_u32(at), size)) {
+            return RESULT_NOT_LIFTED;
+        }
+        if (size > SIZE_MAX - total) {
+            countable = false;
+        } else {
+            total += size;
+        }
+    }
+    if (!countable || !reserve_results(instance, total)) {
         return RESULT_LIFTED_BUT_NO_MEMORY;
     }
-    stasis_string string = {NULL, size};
-    if (size > 0) {
-        memcpy(instance->results, memory.base + address, size);
-        string.data = (const char *)instance->results;
+
+    size_t used = 0;
+    for (size_t i = 0; i < results->leaf_count; i++) {
+        const struct leaf *leaf = &results->leaves[i];
+        const unsigned char *at = tuple + leaf->memory_offset;
+        if (leaf->value.type != STASIS_TYPE_STRING) {
+            stasis_load_scalar(&leaf->value, at, result);
+            continue;
+        }
+        const uint32_t size = stasis_load_u32(at + 4);
+        stasis_string string = {NULL, size};
+        if (size > 0) {
+            memcpy(instance->results + used, memory.base + stasis_load_u32(at), size);
+            string.data = (const char *)instance->results + used;
+            used += size;
+        }
+        memcpy((unsigned char *)result + leaf->value.offset, &string, sizeof string);
     }
-    memcpy(result, &string, sizeof string);
     return RESULT_LIFTED;
+}
+
+/* Lifts an entry point's result from its core result into `result`. A result that flattens into
+ * more core values than a function can return is in a return area, whose address the core result
+ * is. Returns as lift_from_area does. */
+static enum lifted lift_result(stasis_instance *instance, const stasis_entry_point *descriptor,
+                               const struct layout *results, const wasm_val_t *core, void *result) {
+    if (results->flat_count <= STASIS_MAX_FLAT_RESULTS) {
+        stasis_lift_scalar(&results->leaves[0].value, core, result);
+        return RESULT_LIFTED;
+    }
+    uint32_t area = 0;
+    memcpy(&area, &core->of.i32, sizeof area);
+    return lift_from_area(instance, descriptor, results, area, result);
 }
 
 /* Calls the entry point that `descriptor` describes and `id` names, as stasis_call does, leaving
@@ -313,10 +377,8 @@ static stasis_status call(stasis_instance *instance, const stasis_interface *int
     if (descriptor->result != NULL && result == NULL) {
         return STASIS_INVALID_ARGUMENT;
     }
-    if (!arguments_cross(descriptor, arguments)) {
-        return STASIS_INVALID_ARGUMENT;
-    }
-    if (descriptor->result != NULL && !stasis_can_cross(descriptor->result)) {
+    const struct function_layout *layout = &instance->script->entry_point_layouts[id];
+    if (!stasis_function_crosses(layout) || !strings_cross(&layout->parameters, arguments)) {
         return STASIS_INVALID_ARGUMENT;
     }
 
@@ -341,8 +403,8 @@ static stasis_status call(stasis_instance *instance, const stasis_interface *int
     enter(instance);
     wasm_val_t core_arguments[STASIS_MAX_FLAT_PARAMETERS];
     uint32_t argument_count = 0;
-    bool returned =
-        lower_arguments(instance, descriptor, arguments, core_arguments, &argument_count);
+    bool returned = lower_arguments(instance, descriptor, &layout->parameters, arguments,
+                                    core_arguments, &argument_count);
     wasm_val_t core_result;
     memset(&core_result, 0, sizeof core_result);
     const uint32_t result_count = descriptor->result != NULL ? 1 : 0;
@@ -352,16 +414,8 @@ static stasis_status call(stasis_instance *instance, const stasis_interface *int
     }
     enum lifted lifted = RESULT_LIFTED;
     if (returned && descriptor->result != NULL) {
-        if (descriptor->result->type == STASIS_TYPE_STRING) {
-            /* A string flattens into two core values, more than a function can return, so the
-             * script returns the address of a return area that holds them. */
-            uint32_t area = 0;
-            memcpy(&area, &core_result.of.i32, sizeof area);
-            lifted = lift_string_result(instance, descriptor, area, result);
-            returned = lifted != RESULT_NOT_LIFTED;
-        } else {
-            stasis_lift_scalar(descriptor->result, &core_result, result);
-        }
+        lifted = lift_result(instance, descriptor, &layout->result, &core_result, result);
+        returned = lifted != RESULT_NOT_LIFTED;
     }
     /* The script frees its results even when there's no memory to copy them, since they'd stay
      * in its memory otherwise, and in every snapshot of it. */

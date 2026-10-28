@@ -196,7 +196,7 @@ TEST(refuses_bad_arguments_to_a_call) {
         stasis_call(instance, &test_calls_interface, TEST_CALLS_CALLER_ECHO_U8_ENTRY, &value, NULL),
         STASIS_INVALID_ARGUMENT);
 
-    /* What can't cross yet: records, a string and a handle. */
+    /* What can't cross yet: a handle, even beside records and a string that can. */
     test_calls_world_point point = {1.0F, 2.0F};
     test_calls_world_area within = {{0.0F, 0.0F}, {1.0F, 1.0F}, {"here", 4}};
     ASSERT_INT_EQ(test_calls_caller_place(instance, within, NULL, &point), STASIS_INVALID_ARGUMENT);

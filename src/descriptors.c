@@ -184,24 +184,7 @@ static bool leaf_usable(const stasis_interface *interface_data, const stasis_val
     return false;
 }
 
-/* What a walk comes to as it goes through a value, in order: each value that isn't a record, and
- * each record's start, its fields' names and its end, around what the record holds. */
-enum walk_event {
-    WALK_LEAF,
-    WALK_RECORD,
-    WALK_FIELD,
-    WALK_END,
-};
-
-/* Called for each event of a walk, with the value for WALK_LEAF and the field's name for
- * WALK_FIELD. */
-typedef void walk_visit(void *context, enum walk_event event, const stasis_value *leaf,
-                        const char *name);
-
-/* Walks a value, calling `visit` for each event in order. A record's fields are walked in turn,
- * and those of the records they hold within theirs, keeping the walk's place in each record on a
- * stack. Returns false if the value's descriptors are malformed. */
-static bool walk_value(struct descriptor_walk *walk, const stasis_value *value, walk_visit *visit,
+bool stasis_walk_value(struct descriptor_walk *walk, const stasis_value *value, walk_visit *visit,
                        void *context) {
     const stasis_interface *interface_data = walk->interface_data;
     if (value->type != STASIS_TYPE_RECORD) {
@@ -218,7 +201,7 @@ static bool walk_value(struct descriptor_walk *walk, const stasis_value *value, 
     size_t depth = 1;
     walk->frames[0].next = record->fields;
     walk->frames[0].remaining = record->field_count;
-    visit(context, WALK_RECORD, NULL, NULL);
+    visit(context, WALK_RECORD, value, NULL);
     while (depth > 0) {
         struct walk_frame *frame = &walk->frames[depth - 1];
         if (frame->remaining == 0) {
@@ -247,7 +230,7 @@ static bool walk_value(struct descriptor_walk *walk, const stasis_value *value, 
         walk->frames[depth].next = inner->fields;
         walk->frames[depth].remaining = inner->field_count;
         depth++;
-        visit(context, WALK_RECORD, NULL, NULL);
+        visit(context, WALK_RECORD, &field->value, NULL);
     }
     return true;
 }
@@ -270,18 +253,18 @@ struct encoding {
 
 /* Encodes each event of a walk into the signature: a scalar or a handle, and a record's start,
  * fields and end. */
-static void encode(void *context, enum walk_event event, const stasis_value *leaf,
+static void encode(void *context, enum walk_event event, const stasis_value *value,
                    const char *name) {
     struct encoding *encoding = context;
     switch (event) {
     case WALK_LEAF:
-        if (leaf->type == STASIS_TYPE_HANDLE) {
-            const stasis_object_kind *kind = kind_of(encoding->interface_data, leaf);
+        if (value->type == STASIS_TYPE_HANDLE) {
+            const stasis_object_kind *kind = kind_of(encoding->interface_data, value);
             stasis_signature_add_handle(&encoding->signature,
                                         encoding->interface_data->groups[kind->group].name,
                                         kind->name);
         } else {
-            stasis_signature_add_scalar(&encoding->signature, signature_scalars[leaf->type]);
+            stasis_signature_add_scalar(&encoding->signature, signature_scalars[value->type]);
         }
         break;
     case WALK_RECORD:
@@ -305,13 +288,13 @@ static bool function_hash(struct descriptor_walk *walk, const stasis_value *para
     encoding.interface_data = walk->interface_data;
     stasis_signature_init(&encoding.signature, NULL, 0);
     for (size_t i = 0; i < parameter_count; i++) {
-        if (!walk_value(walk, &parameters[i], encode, &encoding)) {
+        if (!stasis_walk_value(walk, &parameters[i], encode, &encoding)) {
             return false;
         }
     }
     if (result != NULL) {
         stasis_signature_begin_result(&encoding.signature);
-        if (!walk_value(walk, result, encode, &encoding)) {
+        if (!stasis_walk_value(walk, result, encode, &encoding)) {
             return false;
         }
     }
@@ -332,17 +315,17 @@ bool stasis_host_function_hash(struct descriptor_walk *walk, const stasis_host_f
 }
 
 /* Notes whether a walk comes to a string. */
-static void find_string(void *context, enum walk_event event, const stasis_value *leaf,
+static void find_string(void *context, enum walk_event event, const stasis_value *value,
                         const char *name) {
     (void)name;
-    if (event == WALK_LEAF && leaf->type == STASIS_TYPE_STRING) {
+    if (event == WALK_LEAF && value->type == STASIS_TYPE_STRING) {
         *(bool *)context = true;
     }
 }
 
 bool stasis_holds_string(struct descriptor_walk *walk, const stasis_value *value, bool *holds) {
     *holds = false;
-    return walk_value(walk, value, find_string, holds);
+    return stasis_walk_value(walk, value, find_string, holds);
 }
 
 /* Values being flattened: the core types of as many as fit, and how many there are in all. */
@@ -362,14 +345,14 @@ static void add_flat(struct flattening *flattening, uint8_t type) {
 
 /* Flattens each value that isn't a record into its core types: a string into a pointer and a
  * length, and a handle into its value. */
-static void flatten(void *context, enum walk_event event, const stasis_value *leaf,
+static void flatten(void *context, enum walk_event event, const stasis_value *value,
                     const char *name) {
     (void)name;
     if (event != WALK_LEAF) {
         return;
     }
     struct flattening *flattening = context;
-    switch (leaf->type) {
+    switch (value->type) {
     case STASIS_TYPE_U64:
     case STASIS_TYPE_S64:
         add_flat(flattening, MODULE_I64);
@@ -390,6 +373,18 @@ static void flatten(void *context, enum walk_event event, const stasis_value *le
     }
 }
 
+bool stasis_flat_count(struct descriptor_walk *walk, const stasis_value *values, size_t value_count,
+                       size_t *count) {
+    struct flattening flattening = {NULL, 0, 0};
+    for (size_t i = 0; i < value_count; i++) {
+        if (!stasis_walk_value(walk, &values[i], flatten, &flattening)) {
+            return false;
+        }
+    }
+    *count = flattening.count;
+    return true;
+}
+
 /* Flattens a function's parameters and result into `type`: its parameters, or one pointer to them
  * past STASIS_MAX_FLAT_PARAMETERS, and its result, which past STASIS_MAX_FLAT_RESULTS is a pointer
  * that the function returns when `returns_area` is set, and that it takes as one more parameter
@@ -402,7 +397,7 @@ static bool function_core_type(struct descriptor_walk *walk, const stasis_value 
     flat_parameters.capacity = STASIS_MAX_FLAT_PARAMETERS;
     flat_parameters.count = 0;
     for (size_t i = 0; i < parameter_count; i++) {
-        if (!walk_value(walk, &parameters[i], flatten, &flat_parameters)) {
+        if (!stasis_walk_value(walk, &parameters[i], flatten, &flat_parameters)) {
             return false;
         }
     }
@@ -418,7 +413,7 @@ static bool function_core_type(struct descriptor_walk *walk, const stasis_value 
         results.types = type->results;
         results.capacity = STASIS_MAX_FLAT_RESULTS;
         results.count = 0;
-        if (!walk_value(walk, result, flatten, &results)) {
+        if (!stasis_walk_value(walk, result, flatten, &results)) {
             return false;
         }
         if (results.count <= STASIS_MAX_FLAT_RESULTS) {
