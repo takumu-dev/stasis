@@ -1,9 +1,10 @@
 ;; The script that most tests call. It provides every entry point of calls.stasis, each doing what
-;; the interface says, and stasis_initialize counts how often it runs.
+;; the interface says, and stasis_initialize counts how often it runs. It exports its memory and its
+;; mutable globals, so it's snapshottable.
 (module
   (memory (export "memory") 1)
-  (global $starts (mut i32) (i32.const 0))
-  (global $frame (mut i64) (i64.const 0))
+  (global $starts (export "starts") (mut i32) (i32.const 0))
+  (global $frame (export "frame") (mut i64) (i64.const 0))
 
   (func (export "stasis_initialize")
     (global.set $starts (i32.add (global.get $starts) (i32.const 1))))

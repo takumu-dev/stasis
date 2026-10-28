@@ -307,6 +307,15 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * required one. It may provide entry points that the interface lacks, which Stasis ignores, as it
  * ignores every export it doesn't recognise.
  *
+ * A script must also keep Stasis's rules, so that creating an instance of it runs none of its code
+ * and can fail only for lack of memory. It has no start section, and exports nothing that a
+ * backend runs by itself when it creates an instance: `_initialize`, `__wasm_call_ctors` or
+ * `__post_instantiate`. It imports only functions, each from one of its interface's groups or from
+ * `wasi_snapshot_preview1`, the system interface. Each of its active data and element segments fits
+ * the memory or the table it's copied into, as that starts, and its memory starts with at most
+ * 65,535 pages. A script that isn't snapshottable still loads, with an empty message, and
+ * stasis_script_snapshottable() says why it isn't.
+ *
  * @param library The library the script goes into.
  * @param interface_data The interface, as `stasis-gen host` writes it. It must outlive the script.
  * @param bytes The module's bytes. It may be null when `size` is 0.
@@ -323,7 +332,7 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * - ::STASIS_INTERFACE_MISMATCH: it lacks a required entry point, or provides one with another
  *   signature;
  * - ::STASIS_INVALID_SCRIPT: it breaks Stasis's rules for scripts, such as with names that don't
- *   parse, or entry points of more than one kind of script;
+ *   parse, entry points of more than one kind of script, or any of the rules above;
  * - ::STASIS_OUT_OF_MEMORY;
  * - ::STASIS_INVALID_ARGUMENT: a pointer that's needed is null, a buffer's size doesn't match its
  *   pointer, or the interface's descriptor format is newer than this release reads.
@@ -370,6 +379,27 @@ STASIS_API const uint8_t *stasis_script_identity(const stasis_script *script);
  * false for any other, and when `script` is null or `entry_point` is out of range.
  */
 STASIS_API bool stasis_script_provides(const stasis_script *script, uint32_t entry_point);
+
+/**
+ * @brief Whether a script is snapshottable, and if not, why.
+ *
+ * A script is snapshottable when a snapshot can hold everything its instances change: their one
+ * linear memory and their mutable globals. Loading checks that the script defines and exports one
+ * memory, which isn't shared, that it contains none of the instructions `table.set`,
+ * `table.grow`, `table.fill`, `table.copy`, `table.init`, `elem.drop` and `data.drop`, and that it
+ * exports every mutable global it defines, each an `i32`, `i64`, `f32` or `f64`. It also imports
+ * only functions, which loading already requires of every script. A script that isn't
+ * snapshottable still loads and runs, and its load writes no message, but its instances can't be
+ * snapshotted.
+ *
+ * @param script The script.
+ * @param reason Where the reason the script isn't snapshottable goes, or null for none. The reason
+ * is in English, names each problem on a line of its own, and stays valid until the script is
+ * destroyed. Its wording may change in any release. It's set to null when the script is
+ * snapshottable, or when `script` is null.
+ * @return Whether the script is snapshottable, which is false when `script` is null.
+ */
+STASIS_API bool stasis_script_snapshottable(const stasis_script *script, const char **reason);
 
 /**
  * @brief Creates an instance of a script, which has to be started before it's called.

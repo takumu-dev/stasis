@@ -1,0 +1,12 @@
+/// A script that reads, fills and grows its memory, which the tests of linear memory call.
+interface test:memory@1.0.0;
+
+script caller {
+    /// Returns how many bytes of the instance's memory aren't zero.
+    fn nonzero_bytes() -> u32;
+    /// Sets every byte of the instance's memory to 0xff.
+    fn fill();
+    /// Grows the instance's memory by `pages`, and returns how many pages it had before, or
+    /// 4294967295 if it couldn't grow.
+    fn grow(pages: u32) -> u32;
+}
