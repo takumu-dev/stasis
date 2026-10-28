@@ -85,6 +85,7 @@ void stasis_raised_trap_clear(struct raised_trap *raised) {
 void stasis_trap_record_init(struct trap_record *record, wasm_module_inst_t instance,
                              const struct module_code *code, const struct raised_trap *raised) {
     stasis_trap *report = &record->report;
+    record->filled = true;
     const char *message = NULL;
     if (raised->raised) {
         report->kind = raised->kind;

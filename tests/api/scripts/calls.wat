@@ -86,4 +86,9 @@
   ;; through a return area.
   (func (export "test:calls/caller@1#place:582f491785a0720b")
     (param f32 f32 f32 f32 i32 i32 i32) (result i32)
+    (unreachable))
+
+  ;; The string in `place`'s arguments needs a cabi_realloc to put it into memory, which no test
+  ;; calls.
+  (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
     (unreachable)))

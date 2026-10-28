@@ -1,0 +1,69 @@
+/* Stasis's calls into a running script instance: the entry point or stasis_initialize that a call
+ * runs, and the canonical ABI's functions that Stasis calls as values cross, cabi_realloc, to
+ * allocate in the script's memory, and an entry point's cabi_post_*, to free its results.
+ *
+ * While Stasis is inside cabi_realloc or a cabi_post_*, the script may call no import, as the
+ * canonical ABI's may_leave says. So Stasis's own calls nest at most one level deep: into
+ * cabi_realloc, from a host function that returns a string.
+ *
+ * When a call traps, the instance's trap report is filled in at once, before any call it's nested
+ * in unwinds, so that the report keeps the kind, the message and the frames of the first trap. */
+
+#ifndef STASIS_CALLS_H
+#define STASIS_CALLS_H
+
+#include <stasis.h>
+#include <stasis_interface.h>
+
+#include "descriptors.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <wasm_export.h>
+
+/* A value that Stasis puts into a script's memory, as messages name it: argument `position`, from
+ * 1, of `entry_point`, or when that's null, the result of `host_function`. */
+struct placed_value {
+    const stasis_entry_point *entry_point;
+    size_t position;
+    const stasis_host_function *host_function;
+};
+
+/* Calls `function` in the running instance with the core arguments given, and its results. Returns
+ * whether it returned. When it trapped, the trap report is filled in, unless an earlier trap of the
+ * same call into the instance filled it in already. */
+bool stasis_invoke(stasis_instance *instance, wasm_function_inst_t function, uint32_t result_count,
+                   wasm_val_t *results, uint32_t argument_count, wasm_val_t *arguments);
+
+/* Fills in the trap report of an instance whose call has trapped, unless it's filled in already:
+ * from the trap of Stasis's own that the call has raised, if any, and otherwise from WAMR's. */
+void stasis_keep_trap(stasis_instance *instance);
+
+/* Allocates `size` bytes aligned to `alignment` in the running instance's memory for `value`, with
+ * the script's cabi_realloc, as the canonical ABI does, and sets `address` to where they are.
+ * Returns false when the call is to end: cabi_realloc trapped, or returned null, which raises
+ * allocation_failed, or an address that's misaligned, or where the bytes run past the end of
+ * memory, which raises boundary_violation. */
+bool stasis_reallocate(stasis_instance *instance, const struct placed_value *value,
+                       uint32_t alignment, uint32_t size, uint32_t *address);
+
+/* Puts `string` into the running instance's memory for `value`, as bytes it allocates with
+ * stasis_reallocate, and sets `address` to where they are. Returns false when the call is to end,
+ * as stasis_reallocate does. */
+bool stasis_place_string(stasis_instance *instance, const struct placed_value *value,
+                         stasis_string string, uint32_t *address);
+
+/* Calls `function`, the cabi_post_* of `entry_point`, in the running instance, with the core
+ * results the entry point returned. Returns whether it returned. */
+bool stasis_post_return(stasis_instance *instance, const stasis_entry_point *entry_point,
+                        wasm_function_inst_t function, uint32_t result_count, wasm_val_t *results);
+
+/* Whether the running instance may call an import now: it may unless Stasis is inside its
+ * cabi_realloc or a cabi_post_*. */
+bool stasis_may_leave(const stasis_instance *instance);
+
+/* Raises the boundary violation of a script that called the import `import` when it may not. */
+void stasis_refuse_leaving(stasis_instance *instance, const struct host_function_name *import);
+
+#endif

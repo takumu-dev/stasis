@@ -9,10 +9,12 @@
 #   memory.*         an instance's linear memory, zeroed when it's created and when it grows
 #   scalars.*        every scalar type, crossing to entry points and back
 #   host_functions.* scripts calling host functions, which the program defines
+#   strings.*        strings crossing both ways, and the load check of what that needs
+#   allocations.*    what calls with strings allocate, which the test-only library counts
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
 #
-# Every script is a WAT module in scripts/, apart from one C script, and each says what it's for.
+# Every script is a WAT module in scripts/, apart from two C scripts, and each says what it's for.
 # Their names carry the hashes of the test interfaces' signatures, as `stasis-gen signatures` prints
 # them.
 
@@ -21,8 +23,10 @@ stasis_generate(host early.stasis OUTPUT_DIRECTORY generated VARIABLE early_host
 stasis_generate(host memory.stasis OUTPUT_DIRECTORY generated VARIABLE memory_host)
 stasis_generate(host traps.stasis OUTPUT_DIRECTORY generated VARIABLE traps_host)
 stasis_generate(host hosts.stasis OUTPUT_DIRECTORY generated VARIABLE hosts_host)
+stasis_generate(host strings.stasis OUTPUT_DIRECTORY generated VARIABLE strings_host)
 
 set(scripts
+    abi_exports_wrong_types
     backend_exports
     bad_names
     broken_rules
@@ -50,11 +54,16 @@ set(scripts
     other_interface
     other_interface_import
     other_signature
+    realloc_missing_for_a_result
+    realloc_missing_for_an_argument
+    realloc_not_a_function
+    realloc_not_needed
     reference_globals
     segments_dont_fit
     segments_fit
     shared_memory
     start_section
+    strings
     traps
     two_memories
     unexported_global
@@ -68,9 +77,11 @@ foreach(script IN LISTS scripts)
     add_dependencies(stasis_api_scripts stasis_script_${script})
 endforeach()
 
-# A C script, built as a script author builds one, whose code is a compiler's.
-stasis_add_c_script(c_script scripts/c_script.c)
-add_dependencies(stasis_api_scripts stasis_script_c_script)
+# C scripts, built as a script author builds one, whose code is a compiler's.
+foreach(script IN ITEMS c_script c_strings)
+    stasis_add_c_script(${script} scripts/${script}.c)
+    add_dependencies(stasis_api_scripts stasis_script_${script})
+endforeach()
 
 # Copies of identity.wasm and traps.wasm without their custom sections, which are the same scripts:
 # the first without a section of its own, and the second without its name section.
@@ -145,6 +156,22 @@ target_link_libraries(stasis_test_host_functions PRIVATE
 # A host function is sure of this much of the stack, which the program checks.
 target_compile_definitions(stasis_test_host_functions PRIVATE
     STASIS_HOST_FUNCTION_STACK=${STASIS_HOST_FUNCTION_STACK}
+)
+
+# So does the host side of strings.stasis, whose host functions string_hosts.c defines, for the
+# program that calls the strings script against the library, and the one that counts what its calls
+# allocate, against the test-only library.
+stasis_add_host_sides(stasis_test_strings_interface stasis::stasis ${strings_host})
+stasis_add_test(strings strings_test.c string_hosts.c string_hosts.h)
+target_link_libraries(stasis_test_strings PRIVATE
+    stasis_api_support
+    stasis_test_strings_interface
+)
+stasis_add_host_sides(stasis_test_strings_interface_testing stasis_testing ${strings_host})
+stasis_add_test(allocations allocations_test.c string_hosts.c string_hosts.h testing.h)
+target_link_libraries(stasis_test_allocations PRIVATE
+    stasis_api_support_testing
+    stasis_test_strings_interface_testing
 )
 
 # The load tests work out a script's identity apart from the library, with SHA-256 alone.

@@ -58,6 +58,10 @@ bool stasis_entry_point_hash(struct descriptor_walk *walk, const stasis_entry_po
 bool stasis_host_function_hash(struct descriptor_walk *walk, const stasis_host_function *function,
                                char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]);
 
+/* Sets `holds` to whether a value holds a string, or is one. Returns false if its descriptors are
+ * malformed. */
+bool stasis_holds_string(struct descriptor_walk *walk, const stasis_value *value, bool *holds);
+
 /* A core function type, as the canonical ABI flattens a function's values: its parameters, or one
  * pointer to them past STASIS_MAX_FLAT_PARAMETERS, and its result, or past
  * STASIS_MAX_FLAT_RESULTS, one pointer to it. An entry point's export returns that pointer, and a
@@ -79,6 +83,24 @@ bool stasis_entry_point_core_type(struct descriptor_walk *walk,
  * descriptors are malformed. */
 bool stasis_host_function_core_type(struct descriptor_walk *walk,
                                     const stasis_host_function *function, struct core_type *type);
+
+/* How a message names a host function or a method: by its group and its own name, and a method by
+ * its kind of host object too, as in `world.find` and `world.entity.name`.
+ * HOST_FUNCTION_NAME_FORMAT prints one, with its arguments from HOST_FUNCTION_NAME_ARGUMENTS. */
+struct host_function_name {
+    const char *group;
+    /* The kind of host object and a dot after it, or two empty strings for a host function. */
+    const char *object;
+    const char *dot;
+    const char *function;
+};
+
+#define HOST_FUNCTION_NAME_FORMAT "`%s.%s%s%s`"
+#define HOST_FUNCTION_NAME_ARGUMENTS(name) (name).group, (name).object, (name).dot, (name).function
+
+/* How a message names `function`, one of the host functions or methods of `interface_data`. */
+struct host_function_name stasis_host_function_name(const stasis_interface *interface_data,
+                                                    const stasis_host_function *function);
 
 /* The number of bytes that a value of `value`'s type takes in a C struct, or 0 if its descriptor
  * is malformed. */

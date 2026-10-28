@@ -13,8 +13,8 @@
  * destroyed.
  *
  * The trampoline lifts the script's arguments into the host function's argument struct, calls its
- * thunk, and lowers the result. So far only scalars cross, so a host function that takes or returns
- * anything else isn't registered, and a script that calls one traps. */
+ * thunk, and lowers the result. So far only scalars and strings cross, so a host function that
+ * takes or returns anything else isn't registered, and a script that calls one traps. */
 
 #ifndef STASIS_HOST_FUNCTIONS_H
 #define STASIS_HOST_FUNCTIONS_H

@@ -37,7 +37,7 @@ add_subdirectory(api)
 
 # The test-only library: the core and WAMR compiled again, as a static library of their own, for the
 # few tests that need what the library proper hides. In it, WAMR's printing goes to the test's
-# output.
+# output, and STASIS_TESTING has the core count what it and WAMR allocate.
 stasis_add_wamr(stasis_wamr_testing VPRINTF stasis_testing_vprintf)
 add_library(stasis_testing STATIC
     ${STASIS_CORE_SOURCES}
@@ -46,6 +46,7 @@ add_library(stasis_testing STATIC
     $<TARGET_OBJECTS:stasis_signature>
 )
 target_include_directories(stasis_testing PUBLIC "${PROJECT_SOURCE_DIR}/include")
+target_compile_definitions(stasis_testing PRIVATE STASIS_TESTING)
 stasis_target_holds_wamr(stasis_testing stasis_wamr_testing)
 stasis_target_conventions(stasis_testing)
 

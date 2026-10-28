@@ -331,6 +331,20 @@ bool stasis_host_function_hash(struct descriptor_walk *walk, const stasis_host_f
                          hash);
 }
 
+/* Notes whether a walk comes to a string. */
+static void find_string(void *context, enum walk_event event, const stasis_value *leaf,
+                        const char *name) {
+    (void)name;
+    if (event == WALK_LEAF && leaf->type == STASIS_TYPE_STRING) {
+        *(bool *)context = true;
+    }
+}
+
+bool stasis_holds_string(struct descriptor_walk *walk, const stasis_value *value, bool *holds) {
+    *holds = false;
+    return walk_value(walk, value, find_string, holds);
+}
+
 /* Values being flattened: the core types of as many as fit, and how many there are in all. */
 struct flattening {
     uint8_t *types;
@@ -429,6 +443,40 @@ bool stasis_host_function_core_type(struct descriptor_walk *walk,
                                     const stasis_host_function *function, struct core_type *type) {
     return function_core_type(walk, function->parameters, function->parameter_count,
                               function->result, false, type);
+}
+
+/* Whether `function` is one of the `count` host functions or methods at `functions`. */
+static bool among(const stasis_host_function *function, const stasis_host_function *functions,
+                  size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (&functions[i] == function) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct host_function_name stasis_host_function_name(const stasis_interface *interface_data,
+                                                    const stasis_host_function *function) {
+    /* A host function the interface somehow lacks is named by itself, in no group. */
+    struct host_function_name name = {"?", "", "", function->name};
+    for (size_t g = 0; g < interface_data->group_count; g++) {
+        const stasis_group *group = &interface_data->groups[g];
+        if (among(function, group->functions, group->function_count)) {
+            name.group = group->name;
+            return name;
+        }
+    }
+    for (size_t k = 0; k < interface_data->kind_count; k++) {
+        const stasis_object_kind *kind = &interface_data->kinds[k];
+        if (among(function, kind->methods, kind->method_count)) {
+            name.group = interface_data->groups[kind->group].name;
+            name.object = kind->name;
+            name.dot = ".";
+            return name;
+        }
+    }
+    return name;
 }
 
 size_t stasis_value_size(const stasis_interface *interface_data, const stasis_value *value) {

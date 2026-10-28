@@ -19,6 +19,9 @@
 /* The export that initialises a new instance, which Stasis calls when it starts. */
 #define STASIS_INITIALIZE_NAME "stasis_initialize"
 
+/* The export through which Stasis allocates in a script's memory. */
+#define STASIS_REALLOC_NAME "cabi_realloc"
+
 /* The most pages of linear memory an instance may have, whatever its module allows. WAMR passes
  * sizes to its allocator in 32 bits, which 65,536 pages would overflow. */
 enum { STASIS_MAX_MEMORY_PAGES = 65535 };
@@ -44,6 +47,9 @@ struct stasis_script {
      * their ids, or null for one the script doesn't provide. */
     char **entry_points;
     size_t entry_point_count;
+    /* The name of each entry point's cabi_post_*, by id, or null for one the script doesn't
+     * export. */
+    char **post_returns;
     /* Whether the script exports stasis_initialize. */
     bool initializes;
     /* Why the script isn't snapshottable, one problem a line, or null when it is. */
@@ -55,6 +61,14 @@ struct stasis_script {
     struct host_functions host_functions;
     /* The number of the script's instances that haven't been destroyed. */
     size_t instance_count;
+};
+
+/* Which of the canonical ABI's functions Stasis is inside of, in a running instance, during which
+ * the script may call no import. */
+enum inside {
+    INSIDE_NEITHER,
+    INSIDE_REALLOC,
+    INSIDE_POST_RETURN,
 };
 
 /* Where an instance is in its life. It's created, then ready once it has started, and running
@@ -76,6 +90,16 @@ struct stasis_instance {
     wasm_function_inst_t initialize;
     /* The function behind each entry point, by id, or null for one the script doesn't provide. */
     wasm_function_inst_t *entry_points;
+    /* cabi_realloc, or null when the script doesn't export it. */
+    wasm_function_inst_t reallocate;
+    /* The cabi_post_* of each entry point, by id, or null for one the script doesn't export. */
+    wasm_function_inst_t *post_returns;
+    /* Which of those Stasis is inside of, and for a cabi_post_*, its entry point. */
+    enum inside inside;
+    const stasis_entry_point *post_returning;
+    /* The buffer that the last call's string results are copied into, and its size. */
+    unsigned char *results;
+    size_t results_size;
     /* The room for a host function's arguments and result, while the instance calls one, which is
      * null when its script's interface has no host function Stasis calls. */
     unsigned char *scratch;
