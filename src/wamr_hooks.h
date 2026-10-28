@@ -10,7 +10,8 @@
 #include <wasm_export.h>
 
 /* Sets `args` to how Stasis initialises WAMR: in its host-allocator mode, through Stasis's own
- * functions, which forward to the C library's, and with no host functions. */
+ * functions, which forward to the C library's and zero linear memory, and with no host
+ * functions. */
 void stasis_wamr_init_args(RuntimeInitArgs *args);
 
 /* WAMR's logging, which Stasis builds it to send here, at any level. It's discarded. */
