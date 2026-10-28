@@ -7,7 +7,13 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <wasm_export.h>
+
+/* An instance, as WAMR's API hands it out: what wasm_module_inst_t points at. This header names it
+ * without including WAMR's API, because with MSVC, wamr_frames.c has to include WAMR's internal
+ * headers before the API. They declare wasm_runtime_malloc and wasm_runtime_free as dllexport, and
+ * MSVC refuses a declaration that adds dllexport to a function declared without it. */
+/* NOLINTNEXTLINE(readability-identifier-naming): it's WAMR's name for the type */
+struct WASMModuleInstanceCommon;
 
 /* One frame of the call stack, as WAMR recorded it. */
 struct wamr_frame {
@@ -28,9 +34,10 @@ struct wamr_frame {
 bool stasis_wamr_frames_have_offsets(void);
 
 /* The number of frames WAMR recorded when the last call into `instance` trapped. */
-uint32_t stasis_wamr_frame_count(wasm_module_inst_t instance);
+uint32_t stasis_wamr_frame_count(struct WASMModuleInstanceCommon *instance);
 
 /* Reads the frame at `index` of those WAMR recorded, counting from the innermost. */
-void stasis_wamr_read_frame(wasm_module_inst_t instance, uint32_t index, struct wamr_frame *frame);
+void stasis_wamr_read_frame(struct WASMModuleInstanceCommon *instance, uint32_t index,
+                            struct wamr_frame *frame);
 
 #endif

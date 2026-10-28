@@ -13,19 +13,22 @@
  * pointer was: with the classic interpreter, an offset in the module's bytes, which the loader
  * runs the code from, and with the fast interpreter, one in the code it compiles each function
  * into. The frame's func_name_wp falls back on an export's or an import's name, so a frame's name
- * is read from the function itself, where only the name section puts one. */
+ * is read from the function itself, where only the name section puts one.
+ *
+ * WAMR's internal headers come before its API, as in WAMR's own sources: bh_vector.h, the first,
+ * includes the platform's header, which MSVC needs to see before wasm_export.h. */
 
 bool stasis_wamr_frames_have_offsets(void) { return WASM_ENABLE_FAST_INTERP == 0; }
 
 /* The interpreter's own view of an instance. WAMR hands out each instance as its common type, but
  * with only an interpreter, every one is the interpreter's, as WAMR allocated it, so it's as
  * aligned as the interpreter's type needs. */
-static const WASMModuleInstance *interpreter_instance(wasm_module_inst_t instance) {
+static const WASMModuleInstance *interpreter_instance(struct WASMModuleInstanceCommon *instance) {
     const void *allocated = instance;
     return allocated;
 }
 
-uint32_t stasis_wamr_frame_count(wasm_module_inst_t instance) {
+uint32_t stasis_wamr_frame_count(struct WASMModuleInstanceCommon *instance) {
     const WASMModuleInstance *module_instance = interpreter_instance(instance);
     if (module_instance->frames == NULL) {
         return 0;
@@ -34,7 +37,8 @@ uint32_t stasis_wamr_frame_count(wasm_module_inst_t instance) {
     return (uint32_t)bh_vector_size(module_instance->frames);
 }
 
-void stasis_wamr_read_frame(wasm_module_inst_t instance, uint32_t index, struct wamr_frame *frame) {
+void stasis_wamr_read_frame(struct WASMModuleInstanceCommon *instance, uint32_t index,
+                            struct wamr_frame *frame) {
     const WASMModuleInstance *module_instance = interpreter_instance(instance);
     const WASMModule *module = module_instance->module;
     WASMCApiFrame recorded;
