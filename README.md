@@ -5,9 +5,10 @@ game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, a host can load a script against its
 interface, learn whether it's snapshottable, create and start instances of it, call their entry
-points with scalar arguments and results, and read the trap report of an instance that traps. The
-generator checks interface files and writes their host side and their WIT rendering. Host
-functions, strings, records, handles, the system interface and snapshots are still to come.
+points and have scripts call its host functions, with scalar arguments and results, and read the
+trap report of an instance that traps. The generator checks interface files and writes their host
+side and their WIT rendering. Strings, records, handles, the system interface and snapshots are
+still to come.
 
 ## Requirements
 
@@ -441,10 +442,12 @@ stasis_library_destroy(library);
   the module in stages, and stops at the first that fails: it must be valid WebAssembly
   (`STASIS_INVALID_MODULE`), built for the interface (`STASIS_WRONG_INTERFACE`), and for its line
   (`STASIS_INCOMPATIBLE_VERSION`), which is the major version, or under 0.x the major and minor
-  versions. Then it lists every problem it finds: a required entry point missing or an entry point
-  with another signature (`STASIS_INTERFACE_MISMATCH`), and names that don't parse or disagree, or
-  a broken rule (`STASIS_INVALID_SCRIPT`). A script built against an older or newer minor version
-  loads, and an entry point that the host's interface lacks is ignored.
+  versions. Then it lists every problem it finds: a required entry point missing, an entry point
+  with another signature, or a host function that the interface lacks or declares with another
+  signature (`STASIS_INTERFACE_MISMATCH`), and names that don't parse or disagree, a function of
+  another type than its signature makes it, or a broken rule (`STASIS_INVALID_SCRIPT`). A script
+  built against an older or newer minor version loads, and an entry point that the host's interface
+  lacks is ignored.
 - Stasis's rules make sure that creating an instance runs no script code and fails only for lack
   of memory. A script has no start section, and exports none of `_initialize`, `__wasm_call_ctors`
   and `__post_instantiate`, which a backend would run by itself. It imports only functions, from
@@ -485,3 +488,43 @@ stasis_library_destroy(library);
   ```
 - Objects are destroyed children first: destroying a script that has instances, or a library that
   has scripts, is refused with `STASIS_REFUSED_IN_USE`. Destroying null does nothing.
+
+### Host functions
+
+A script calls the host functions its interface declares, which the host defines, and which Stasis
+calls through the thunks in the host's side. Stasis lifts each argument from the script as the
+canonical ABI does it, and lowers the result back. Arguments that flatten into more than 16 core
+parameters spill into the script's memory, which Stasis reads them from, and a script that passes
+them outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. So far only
+scalars cross, so a script that calls a host function that takes or returns a string, a record or a
+handle traps.
+
+- A host function ends the call it's part of with `stasis_abort`. It then returns as it would
+  otherwise, Stasis ignores its result, and the call traps as `STASIS_TRAP_KIND_HOST_ABORT`, with
+  the first message it was given. The report's innermost frame is the host function's.
+
+  ```c
+  acme_dungeon_world_entity *acme_dungeon_world_find(stasis_instance *instance,
+                                                     stasis_string name) {
+      acme_dungeon_world_entity *found = world_find(name);
+      if (found == NULL) {
+          stasis_abort(instance, "no entity has that name");
+          return NULL;
+      }
+      return found;
+  }
+  ```
+- Calls into scripts never nest. While an instance is running on a thread, as it is in each of its
+  host functions, starting or calling any instance on that thread, the running one included, is
+  refused with `STASIS_REFUSED_NESTED`, and aborting one that isn't running on it with
+  `STASIS_REFUSED_NOT_RUNNING`. A host function may still create, destroy and load anything that
+  runs no script code: any instance but the running one, whose destruction is refused with
+  `STASIS_REFUSED_RUNNING`. A script that wants another to act goes through the host, which calls
+  it once the current call has returned.
+- A host function runs on the thread and stack that called into its instance, with at least 16 KiB
+  of the stack free. A call into a script needs 20 KiB free beyond what the host has used when it
+  calls, which covers that and Stasis's own frames, or 52 KiB in a build with AddressSanitizer or
+  ThreadSanitizer. A call that comes nearer the end of the native stack, as it enters the script or
+  before a host function, traps as `STASIS_TRAP_KIND_STACK_EXHAUSTED`. Stasis installs no signal
+  handler and touches no stack, so a host function that uses more stack than it's sure of crashes,
+  as any C function would.

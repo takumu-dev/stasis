@@ -3,6 +3,7 @@
 
 #include "allocator.h"
 #include "descriptors.h"
+#include "host_functions.h"
 #include "message.h"
 #include "module.h"
 #include "names.h"
@@ -56,6 +57,17 @@ struct entry_point_exports {
     bool same_signature;
 };
 
+/* What a function imported from one of the interface's groups names: whether its field name parsed,
+ * and if so, as what, the host function or method it names, if the interface has it, and whether
+ * its hash is the host's. */
+struct host_import {
+    bool from_group;
+    bool parsed;
+    struct field_name field;
+    const stasis_host_function *function;
+    bool same_signature;
+};
+
 /* A load in progress. */
 struct load {
     const stasis_interface *interface_data;
@@ -68,6 +80,8 @@ struct load {
     struct parsed_name *exports;
     /* The exports that name each of the interface's entry points, by id. */
     struct entry_point_exports *entry_points;
+    /* What each import names, if it's a function from one of the interface's groups, by index. */
+    struct host_import *host_imports;
     /* The status of the first problem found, or STASIS_OK while there's none. */
     stasis_status status;
 };
@@ -99,6 +113,11 @@ static void parse_names(struct load *load) {
         parsed->wire = stasis_is_group_name(module);
         if (parsed->wire) {
             parsed->parsed = stasis_parse_group_name(module, &parsed->name);
+        }
+        struct host_import *host = &load->host_imports[i];
+        if (parsed->parsed && load->module.imports[i].kind == MODULE_FUNCTION) {
+            host->from_group = true;
+            host->parsed = stasis_parse_field_name(load->module.imports[i].field, &host->field);
         }
     }
     for (uint32_t i = 0; i < load->module.export_count; i++) {
@@ -167,6 +186,13 @@ static const struct parsed_name *first_name(const struct load *load, name_test *
     (interface_data)->space, (interface_data)->name, (unsigned long)(interface_data)->major,       \
         (unsigned long)(interface_data)->minor, (unsigned long)(interface_data)->patch
 
+/* A host function's or a method's name as an import names it, with its group, as in `world.find`
+ * or `world.entity.name`, for a message. */
+#define HOST_FUNCTION_FORMAT "`%.*s.%.*s%s%.*s`"
+#define HOST_FUNCTION_ARGUMENTS(group, field)                                                      \
+    printed(group), (group).data, printed((field).object), (field).object.data,                    \
+        (field).object.size > 0 ? "." : "", printed((field).function), (field).function.data
+
 /* The stages that stop the load at the first that fails: every name must be the host's interface,
  * and then its line. Returns false if one fails. */
 static bool check_stages(struct load *load) {
@@ -224,13 +250,102 @@ static void match_entry_points(struct load *load) {
     }
 }
 
+/* The group of the interface called `name`, with its index in `index`, or null if it has none. */
+static const stasis_group *find_group(const stasis_interface *interface_data, stasis_string name,
+                                      size_t *index) {
+    for (size_t g = 0; g < interface_data->group_count; g++) {
+        if (stasis_string_is(name, interface_data->groups[g].name)) {
+            *index = g;
+            return &interface_data->groups[g];
+        }
+    }
+    return NULL;
+}
+
+/* The host function or the method that `field` names among those of the group called `group`, or
+ * null if the interface has none. */
+static const stasis_host_function *find_host_function(const stasis_interface *interface_data,
+                                                      stasis_string group,
+                                                      const struct field_name *field) {
+    size_t index = 0;
+    const stasis_group *found = find_group(interface_data, group, &index);
+    if (found == NULL) {
+        return NULL;
+    }
+    const stasis_host_function *functions = found->functions;
+    size_t count = found->function_count;
+    if (field->object.size > 0) {
+        functions = NULL;
+        count = 0;
+        for (size_t k = 0; k < interface_data->kind_count; k++) {
+            const stasis_object_kind *kind = &interface_data->kinds[k];
+            if (kind->group == index && stasis_string_is(field->object, kind->name)) {
+                functions = kind->methods;
+                count = kind->method_count;
+                break;
+            }
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (stasis_string_is(field->function, functions[i].name)) {
+            return &functions[i];
+        }
+    }
+    return NULL;
+}
+
+/* Finds the host function or method that each function imported from a group names. */
+static void match_host_functions(struct load *load) {
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        struct host_import *host = &load->host_imports[i];
+        if (host->parsed) {
+            host->function =
+                find_host_function(load->interface_data, load->imports[i].name.scope, &host->field);
+        }
+    }
+}
+
+/* The problems with the script's host functions: one the interface lacks, and one whose hash isn't
+ * the host's. Returns false if the interface's descriptors are malformed. */
+static bool check_host_function_signatures(struct load *load) {
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        struct host_import *host = &load->host_imports[i];
+        if (!host->parsed) {
+            continue;
+        }
+        const stasis_string group = load->imports[i].name.scope;
+        if (host->function == NULL) {
+            problem(load, STASIS_INTERFACE_MISMATCH,
+                    "the script imports the host function " HOST_FUNCTION_FORMAT
+                    ", which " INTERFACE_FORMAT " lacks",
+                    HOST_FUNCTION_ARGUMENTS(group, host->field),
+                    INTERFACE_ARGUMENTS(load->interface_data));
+            continue;
+        }
+        char hash[STASIS_SIGNATURE_HASH_LENGTH + 1];
+        if (!stasis_host_function_hash(&load->walk, host->function, hash)) {
+            return false;
+        }
+        host->same_signature = stasis_string_is(host->field.hash, hash);
+        if (!host->same_signature) {
+            problem(load, STASIS_INTERFACE_MISMATCH,
+                    "the script's host function " HOST_FUNCTION_FORMAT
+                    " has another signature than in " INTERFACE_FORMAT,
+                    HOST_FUNCTION_ARGUMENTS(group, host->field),
+                    INTERFACE_ARGUMENTS(load->interface_data));
+        }
+    }
+    return true;
+}
+
 /* The hash in the name of an export that parsed as an entry point's. */
 static stasis_string export_hash(const struct load *load, const struct module_export *export) {
     return load->exports[export - load->module.exports].name.hash;
 }
 
-/* The problems with the script's signatures: a required entry point it lacks, and an entry point
- * whose hash isn't the host's. Returns false if the interface's descriptors are malformed. */
+/* The problems with the script's signatures: a required entry point it lacks, an entry point whose
+ * hash isn't the host's, and then its host functions'. Returns false if the interface's descriptors
+ * are malformed. */
 static bool check_signatures(struct load *load) {
     for (size_t id = 0; id < load->kind->entry_point_count; id++) {
         const stasis_entry_point *entry_point = &load->kind->entry_points[id];
@@ -253,19 +368,24 @@ static bool check_signatures(struct load *load) {
                 load->kind->name, entry_point->name, INTERFACE_ARGUMENTS(load->interface_data));
         }
     }
-    return true;
+    return check_host_function_signatures(load);
 }
 
 /* The problems with the script's names: names that don't parse, entry points of more than one kind
  * of script, and an entry point exported twice. */
 static void check_names(struct load *load) {
     for (uint32_t i = 0; i < load->module.import_count; i++) {
+        const stasis_string module = load->module.imports[i].module;
         if (load->imports[i].wire && !load->imports[i].parsed) {
-            const stasis_string module = load->module.imports[i].module;
             problem(load, STASIS_INVALID_SCRIPT,
                     "the import module `%.*s` doesn't parse as the name of a group of an "
                     "interface",
                     printed(module), module.data);
+        } else if (load->host_imports[i].from_group && !load->host_imports[i].parsed) {
+            const stasis_string field = load->module.imports[i].field;
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the import `%.*s` from `%.*s` doesn't parse as the name of a host function",
+                    printed(field), field.data, printed(module), module.data);
         }
     }
     const struct wire_name *first_kind = NULL;
@@ -414,6 +534,40 @@ static bool check_exports(struct load *load) {
     return true;
 }
 
+/* The problems with the host functions the script imports: one whose type isn't the one Stasis
+ * calls it with. Returns false if the interface's descriptors are malformed. */
+static bool check_imports(struct load *load) {
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        const struct host_import *host = &load->host_imports[i];
+        /* A signature that differs already fails the load, and the import's type is what that
+         * signature makes it. */
+        if (host->function == NULL || !host->same_signature) {
+            continue;
+        }
+        struct core_type core;
+        if (!stasis_host_function_core_type(&load->walk, host->function, &core)) {
+            return false;
+        }
+        const uint32_t index = load->module.imports[i].type;
+        const struct module_function_type *type =
+            index < load->module.type_count ? &load->module.types[index] : NULL;
+        if (type != NULL && !has_core_type(type, &core)) {
+            char actual[CORE_TYPE_SIZE];
+            char expected[CORE_TYPE_SIZE];
+            format_type(actual, sizeof actual, type->parameters, type->parameter_count,
+                        type->results, type->result_count);
+            format_type(expected, sizeof expected, core.parameters, core.parameter_count,
+                        core.results, core.result_count);
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script imports the host function " HOST_FUNCTION_FORMAT
+                    " as a function of type %s, where its signature makes it %s",
+                    HOST_FUNCTION_ARGUMENTS(load->imports[i].name.scope, host->field), actual,
+                    expected);
+        }
+    }
+    return true;
+}
+
 /* Whether an export's name is that of a function some backend runs by itself when it creates an
  * instance, as it would a start section: WAMR runs `__wasm_call_ctors` and `__post_instantiate`,
  * and with its own system interface, `_initialize`. */
@@ -538,8 +692,10 @@ static stasis_status check(struct load *load) {
     load->exports = stasis_allocate_zeroed(load->module.export_count, sizeof *load->exports);
     load->entry_points =
         stasis_allocate_zeroed(load->kind->entry_point_count, sizeof *load->entry_points);
+    load->host_imports =
+        stasis_allocate_zeroed(load->module.import_count, sizeof *load->host_imports);
     if (load->imports == NULL || load->exports == NULL || load->entry_points == NULL ||
-        !stasis_walk_init(&load->walk, load->interface_data)) {
+        load->host_imports == NULL) {
         return STASIS_OUT_OF_MEMORY;
     }
     parse_names(load);
@@ -547,11 +703,12 @@ static stasis_status check(struct load *load) {
         return load->status;
     }
     match_entry_points(load);
+    match_host_functions(load);
     if (!check_signatures(load)) {
         return STASIS_INVALID_ARGUMENT;
     }
     check_names(load);
-    if (!check_exports(load)) {
+    if (!check_exports(load) || !check_imports(load)) {
         return STASIS_INVALID_ARGUMENT;
     }
     check_rules(load);
@@ -565,6 +722,7 @@ static void free_load(struct load *load) {
     stasis_deallocate(load->imports);
     stasis_deallocate(load->exports);
     stasis_deallocate(load->entry_points);
+    stasis_deallocate(load->host_imports);
 }
 
 /* Copies a name into a C string of its own, or returns null if there's no memory for it. */
@@ -587,6 +745,7 @@ static void free_script(stasis_script *script) {
         }
     }
     stasis_deallocate((void *)script->entry_points);
+    stasis_host_functions_free(&script->host_functions);
     stasis_deallocate(script->unsnapshottable);
     stasis_module_code_free(&script->code);
     stasis_deallocate(script->bytes);
@@ -661,11 +820,31 @@ static stasis_status load_script(stasis_library *library, struct load *load, con
     if (size > 0) {
         memcpy(created->bytes, bytes, size);
     }
+    if (!stasis_walk_init(&load->walk, load->interface_data)) {
+        free_script(created);
+        return STASIS_OUT_OF_MEMORY;
+    }
+    const stasis_status prepared =
+        stasis_host_functions_init(&created->host_functions, &load->walk);
+    if (prepared != STASIS_OK) {
+        free_script(created);
+        return prepared;
+    }
+
+    /* WAMR links the module's imports as it loads it, to the host functions registered then. */
     char wamr_message[WAMR_MESSAGE_SIZE] = "";
     stasis_lock();
-    created->module =
-        wasm_runtime_load(created->bytes, (uint32_t)size, wamr_message, sizeof wamr_message);
+    const bool registered = stasis_host_functions_register(&created->host_functions);
+    if (registered) {
+        created->module =
+            wasm_runtime_load(created->bytes, (uint32_t)size, wamr_message, sizeof wamr_message);
+        stasis_host_functions_unregister(&created->host_functions);
+    }
     stasis_unlock();
+    if (!registered) {
+        free_script(created);
+        return STASIS_OUT_OF_MEMORY;
+    }
     if (created->module == NULL) {
         free_script(created);
         problem(load, STASIS_INVALID_MODULE, "%s", wamr_message);

@@ -1,5 +1,5 @@
-/* What the core derives from an interface's descriptors: the hash of each entry point's signature,
- * and the core WebAssembly types each entry point's values flatten to, as the canonical ABI
+/* What the core derives from an interface's descriptors: the hash of each host function's and entry
+ * point's signature, and the core WebAssembly types their values flatten to, as the canonical ABI
  * flattens them.
  *
  * The descriptors are the host's constant data, which the core trusts to be as the generator
@@ -29,8 +29,9 @@ enum {
 const stasis_script_kind *stasis_interface_script_kind(const stasis_interface *interface_data);
 
 /* Whether the parts of an interface's data that every load reads are there: the kind of script
- * that stasis_interface_script_kind finds, the interface's names, and its entry points' names and
- * parameters. */
+ * that stasis_interface_script_kind finds, the interface's names, its entry points' names and
+ * parameters, and its groups and kinds of host object, with their host functions' and methods'
+ * names, parameters and thunks. */
 bool stasis_interface_usable(const stasis_interface *interface_data);
 
 /* What walking an interface's values needs: room to keep its place in each record it's within. */
@@ -52,11 +53,18 @@ void stasis_walk_free(struct descriptor_walk *walk);
 bool stasis_entry_point_hash(struct descriptor_walk *walk, const stasis_entry_point *entry_point,
                              char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]);
 
-/* The core function type that an entry point's export has, as the canonical ABI flattens it to be
- * lifted: its parameters, or one pointer to them past STASIS_MAX_FLAT_PARAMETERS, and its result,
- * or one pointer to it past STASIS_MAX_FLAT_RESULTS. Each type is a module.h value type. */
+/* Writes the hash of a host function's or a method's signature. Returns false if its descriptors
+ * are malformed. */
+bool stasis_host_function_hash(struct descriptor_walk *walk, const stasis_host_function *function,
+                               char hash[STASIS_SIGNATURE_HASH_LENGTH + 1]);
+
+/* A core function type, as the canonical ABI flattens a function's values: its parameters, or one
+ * pointer to them past STASIS_MAX_FLAT_PARAMETERS, and its result, or past
+ * STASIS_MAX_FLAT_RESULTS, one pointer to it. An entry point's export returns that pointer, and a
+ * host function's import takes it as one more parameter, which is why there's room for one more.
+ * Each type is a module.h value type. */
 struct core_type {
-    uint8_t parameters[STASIS_MAX_FLAT_PARAMETERS];
+    uint8_t parameters[STASIS_MAX_FLAT_PARAMETERS + 1];
     uint32_t parameter_count;
     uint8_t results[STASIS_MAX_FLAT_RESULTS];
     uint32_t result_count;
@@ -66,6 +74,11 @@ struct core_type {
  * malformed. */
 bool stasis_entry_point_core_type(struct descriptor_walk *walk,
                                   const stasis_entry_point *entry_point, struct core_type *type);
+
+/* Writes the core function type of a host function's or a method's import. Returns false if its
+ * descriptors are malformed. */
+bool stasis_host_function_core_type(struct descriptor_walk *walk,
+                                    const stasis_host_function *function, struct core_type *type);
 
 /* The number of bytes that a value of `value`'s type takes in a C struct, or 0 if its descriptor
  * is malformed. */

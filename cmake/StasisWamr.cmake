@@ -14,10 +14,26 @@ include(StasisWamrFiles)
 
 set(STASIS_WAMR_DIR "${PROJECT_SOURCE_DIR}/third_party/wamr")
 
+# The stack a host function is sure of when a script calls it, in bytes, which the generator's
+# documentation of each host function states.
+set(STASIS_HOST_FUNCTION_STACK 16384)
+
 # The stack guard, in bytes: how near the end of the native stack a call may come before WAMR traps.
-# It's room for WAMR's own trap path, and the stack a host function is sure of when a script calls
-# it, which the generator's documentation of each host function states.
-set(STASIS_WAMR_STACK_GUARD_SIZE 16384)
+# WAMR checks it on entering a script, and before each host function, ahead of its own frames and
+# Stasis's on the way there, which take up to about 600 bytes with the compilers Stasis supports. So
+# the guard is the host function stack with 4 KiB to spare.
+#
+# A call that passes the first check can fail the second, once the interpreter's own frame is on the
+# stack, and setting the trap then takes stack of its own. The interpreter's frame is about 3 KiB, and
+# the trap's about 2 KiB, which the guard covers. AddressSanitizer and ThreadSanitizer make both many
+# times larger, the interpreter's frame about 26 KiB, so a build that compiles WAMR with either keeps
+# 32 KiB more. The tests of host functions check that a host function has all its stack, and that a
+# call that runs short of stack traps.
+set(stasis_guard_room 4096)
+if(CMAKE_C_FLAGS MATCHES "[-/]fsanitize=([^ ]*,)?(address|thread)")
+    math(EXPR stasis_guard_room "${stasis_guard_room} + 32768")
+endif()
+math(EXPR STASIS_WAMR_STACK_GUARD_SIZE "${STASIS_HOST_FUNCTION_STACK} + ${stasis_guard_room}")
 
 # WAMR calls host functions through assembly of its own: GNU assembly on Linux and MASM on Windows.
 # On Linux it also calls the maths library and threads, which older C libraries keep apart from the

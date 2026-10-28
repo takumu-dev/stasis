@@ -1,0 +1,82 @@
+/// Host functions that take and return every scalar type, which the tests of host functions define,
+/// and entry points through which a script calls them.
+interface test:hosts@1.0.0;
+
+group host {
+    /// Each records its argument and returns the reply the test has set.
+    fn pass_u8(value: u8) -> u8;
+    fn pass_u16(value: u16) -> u16;
+    fn pass_u32(value: u32) -> u32;
+    fn pass_u64(value: u64) -> u64;
+    fn pass_s8(value: s8) -> s8;
+    fn pass_s16(value: s16) -> s16;
+    fn pass_s32(value: s32) -> s32;
+    fn pass_s64(value: s64) -> s64;
+    fn pass_f32(value: f32) -> f32;
+    fn pass_f64(value: f64) -> f64;
+    fn pass_bool(value: bool) -> bool;
+
+    /// Does what the test has set it to do.
+    fn ping();
+
+    /// Each records its arguments and returns the reply the test has set. Sixteen flatten into
+    /// core parameters, and seventeen spill into the script's memory.
+    fn sixteen(
+        a: u8, b: s16, c: u32, d: u64, e: f32, f: f64, g: bool, h: s64,
+        i: u16, j: s8, k: s32, l: u64, m: f32, n: f64, o: bool, p: u8
+    ) -> u64;
+    fn seventeen(
+        a: u8, b: s16, c: u32, d: u64, e: f32, f: f64, g: bool, h: s64,
+        i: u16, j: s8, k: s32, l: u64, m: f32, n: f64, o: bool, p: u8, q: s64
+    ) -> u64;
+
+    /// A kind of host object, whose method takes a handle, which can't cross yet.
+    object thing {
+        fn poke();
+    }
+}
+
+group other {
+    /// Has the same name as `host.ping`, and returns how many times it has been called.
+    fn ping() -> u32;
+}
+
+script caller {
+    uses host, other;
+
+    /// Each passes its argument to `host.pass_<type>` and returns what that returns.
+    optional fn relay_u8(value: u8) -> u8;
+    optional fn relay_u16(value: u16) -> u16;
+    optional fn relay_u32(value: u32) -> u32;
+    optional fn relay_u64(value: u64) -> u64;
+    optional fn relay_s8(value: s8) -> s8;
+    optional fn relay_s16(value: s16) -> s16;
+    optional fn relay_s32(value: s32) -> s32;
+    optional fn relay_s64(value: s64) -> s64;
+    optional fn relay_f32(value: f32) -> f32;
+    optional fn relay_f64(value: f64) -> f64;
+    optional fn relay_bool(value: bool) -> bool;
+
+    /// Each passes the 32 bits of `bits` as they are to `host.pass_<type>`, and returns what the
+    /// script sees that return, widened to 32 bits.
+    optional fn relay_bits_u8(bits: u32) -> u32;
+    optional fn relay_bits_u16(bits: u32) -> u32;
+    optional fn relay_bits_s8(bits: u32) -> u32;
+    optional fn relay_bits_s16(bits: u32) -> u32;
+    optional fn relay_bits_bool(bits: u32) -> u32;
+
+    /// Each calls the host function of its name with the same arguments, which the tests know, and
+    /// returns what it returns.
+    optional fn call_sixteen() -> u64;
+    optional fn call_seventeen() -> u64;
+    /// Calls `host.seventeen` with its spilled arguments at `address` in the script's memory, as
+    /// they are.
+    optional fn call_seventeen_at(address: u32) -> u64;
+
+    /// Calls `host.ping` twice.
+    optional fn ping();
+    /// Calls `other.ping`, and returns what it returns.
+    optional fn ping_other() -> u32;
+    /// Calls `host.thing.poke` with the handle 0, which names no host object.
+    optional fn poke();
+}

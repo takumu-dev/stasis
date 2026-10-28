@@ -7,6 +7,7 @@
 #include <stasis.h>
 #include <stasis_interface.h>
 
+#include "host_functions.h"
 #include "module.h"
 #include "trap.h"
 
@@ -50,6 +51,8 @@ struct stasis_script {
     /* Where the module's code is, which turns where WAMR says a frame of a trap report was into the
      * instruction it was at. It's empty when WAMR doesn't say. */
     struct module_code code;
+    /* The copy of the interface's host functions that WAMR linked the module's imports to. */
+    struct host_functions host_functions;
     /* The number of the script's instances that haven't been destroyed. */
     size_t instance_count;
 };
@@ -73,6 +76,11 @@ struct stasis_instance {
     wasm_function_inst_t initialize;
     /* The function behind each entry point, by id, or null for one the script doesn't provide. */
     wasm_function_inst_t *entry_points;
+    /* The room for a host function's arguments and result, while the instance calls one, which is
+     * null when its script's interface has no host function Stasis calls. */
+    unsigned char *scratch;
+    /* The trap of Stasis's own that the call the instance is running has come to, if any. */
+    struct raised_trap raised;
     /* The trap report, once the instance has trapped. */
     struct trap_record trap;
 };

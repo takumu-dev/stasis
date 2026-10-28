@@ -305,7 +305,9 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * Between compatible versions, older or newer, every entry point that the script provides and the
  * interface declares must have the same signature in both, and the script must provide every
  * required one. It may provide entry points that the interface lacks, which Stasis ignores, as it
- * ignores every export it doesn't recognise.
+ * ignores every export it doesn't recognise. Every host function it imports must be the
+ * interface's, with the same signature. So far only scalars cross, so a script may import a host
+ * function that takes or returns a string, a record or a handle, but a call to it traps.
  *
  * A script must also keep Stasis's rules, so that creating an instance of it runs none of its code
  * and can fail only for lack of memory. It has no start section, and exports nothing that a
@@ -329,10 +331,12 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * - ::STASIS_INVALID_MODULE: the bytes aren't valid WebAssembly;
  * - ::STASIS_WRONG_INTERFACE: the script was built for another interface;
  * - ::STASIS_INCOMPATIBLE_VERSION: it was built for an incompatible version of the interface;
- * - ::STASIS_INTERFACE_MISMATCH: it lacks a required entry point, or provides one with another
+ * - ::STASIS_INTERFACE_MISMATCH: it lacks a required entry point, provides one with another
+ *   signature, or imports a host function that the interface lacks or declares with another
  *   signature;
  * - ::STASIS_INVALID_SCRIPT: it breaks Stasis's rules for scripts, such as with names that don't
- *   parse, entry points of more than one kind of script, or any of the rules above;
+ *   parse, entry points of more than one kind of script, an entry point or a host function of
+ *   another type than its signature makes it, or any of the rules above;
  * - ::STASIS_OUT_OF_MEMORY;
  * - ::STASIS_INVALID_ARGUMENT: a pointer that's needed is null, a buffer's size doesn't match its
  *   pointer, or the interface's descriptor format is newer than this release reads.
@@ -404,7 +408,7 @@ STASIS_API bool stasis_script_snapshottable(const stasis_script *script, const c
 /**
  * @brief Creates an instance of a script, which has to be started before it's called.
  *
- * Creating an instance runs none of the script's code.
+ * Creating an instance runs none of the script's code, so a host function may create one.
  *
  * @param script The script.
  * @param user_data A pointer of the host's, which Stasis never dereferences, and which
@@ -424,13 +428,16 @@ STASIS_API stasis_status stasis_instance_create(stasis_script *script, void *use
  *
  * @param instance The script instance, which must have been created and not started.
  * @return ::STASIS_OK once the instance is ready. ::STASIS_TRAP when initialisation trapped, and a
- * refusal when the instance can't start: ::STASIS_REFUSED_NESTED, ::STASIS_REFUSED_TRAPPED, or
+ * refusal when the instance can't start: ::STASIS_REFUSED_NESTED while an instance, this one or
+ * another, is running on this thread, as it is in a host function, ::STASIS_REFUSED_TRAPPED, or
  * ::STASIS_REFUSED_STARTED once it has started. ::STASIS_INVALID_ARGUMENT when `instance` is null.
  */
 STASIS_API stasis_status stasis_instance_start(stasis_instance *instance);
 
 /**
  * @brief Destroys a script instance.
+ *
+ * A host function may destroy any instance but the one that called it.
  *
  * @param instance The script instance, or null.
  * @return ::STASIS_OK, which destroying null also returns, or ::STASIS_REFUSED_RUNNING when the
@@ -450,7 +457,8 @@ STASIS_API void *stasis_instance_user_data(const stasis_instance *instance);
  * @brief Calls one of a script instance's entry points.
  *
  * The typed callers that `stasis-gen host` writes each call it for one entry point, with the
- * arguments and result in their own types.
+ * arguments and result in their own types. Calls into scripts never nest: while one is running on
+ * a thread, as it is in a host function, no instance can be called on that thread.
  *
  * @param instance The script instance to call, which must be ready.
  * @param interface_data The interface the instance's script was loaded against.
@@ -463,9 +471,10 @@ STASIS_API void *stasis_instance_user_data(const stasis_instance *instance);
  * it returns nothing. It's zeroed when the call fails. The strings in a result, in records too,
  * stay valid until the next call into the instance, or until the instance is destroyed.
  * @return ::STASIS_OK once the entry point has returned. ::STASIS_TRAP when it trapped, and a
- * refusal when the instance couldn't take the call: ::STASIS_REFUSED_NESTED,
- * ::STASIS_REFUSED_TRAPPED, ::STASIS_REFUSED_NOT_STARTED, or ::STASIS_REFUSED_ABSENT for an
- * optional entry point the script doesn't provide. ::STASIS_INVALID_ARGUMENT when an argument fails
+ * refusal when the instance couldn't take the call: ::STASIS_REFUSED_NESTED while an instance, this
+ * one or another, is running on this thread, ::STASIS_REFUSED_TRAPPED,
+ * ::STASIS_REFUSED_NOT_STARTED, or ::STASIS_REFUSED_ABSENT for an optional entry point the script
+ * doesn't provide. ::STASIS_INVALID_ARGUMENT when an argument fails
  * a check: when `instance` is null, `interface_data` isn't the interface its script was loaded
  * against, `entry_point` is out of range, or `arguments` or `result` is null where it's needed. So
  * far only scalars cross, so a call to an entry point that takes or returns a string, a record or
@@ -479,8 +488,9 @@ STASIS_API stasis_status stasis_call(stasis_instance *instance,
  * @brief What made a script instance trap, whatever the backend it ran on.
  *
  * A kind's number never changes and is never reused, but any minor release may add kinds, so a host
- * handles kinds it doesn't know. So far only WebAssembly's own kinds can happen: Stasis's own come
- * with host functions, handles and the system interface, which this release lacks.
+ * handles kinds it doesn't know. Of Stasis's own kinds, so far only ::STASIS_TRAP_KIND_HOST_ABORT
+ * and ::STASIS_TRAP_KIND_BOUNDARY_VIOLATION can happen: the others come with strings, handles and
+ * the system interface, which this release lacks.
  */
 typedef enum stasis_trap_kind {
     /**
@@ -507,8 +517,9 @@ typedef enum stasis_trap_kind {
     /** A NaN was converted to an integer. */
     STASIS_TRAP_KIND_INVALID_CONVERSION = 5,
     /**
-     * The script's calls nested too deep for its instance's stack, or for the native stack of the
-     * thread that called it.
+     * The script's calls nested too deep for its instance's stack, or the native stack of the
+     * thread that called it ran short, which Stasis checks as a call enters the script and before
+     * each host function.
      */
     STASIS_TRAP_KIND_STACK_EXHAUSTED = 6,
     /** Any other trap of WebAssembly's, such as an access to a table outside its bounds. */
@@ -517,7 +528,7 @@ typedef enum stasis_trap_kind {
     STASIS_TRAP_KIND_HOST_ABORT = 8,
     /**
      * The script broke a rule of the boundary between it and the host, such as by passing a string
-     * that isn't UTF-8, or a handle it was never given.
+     * that isn't UTF-8, a handle it was never given, or arguments outside its memory.
      */
     STASIS_TRAP_KIND_BOUNDARY_VIOLATION = 9,
     /**
@@ -540,6 +551,9 @@ typedef enum stasis_trap_kind {
 
 /**
  * @brief One frame of a trapped call's stack: a function that was running when the call trapped.
+ *
+ * A trap in a call to a host function, such as an abort, has the host function as its innermost
+ * frame.
  */
 typedef struct stasis_trap_frame {
     /**
@@ -548,13 +562,15 @@ typedef struct stasis_trap_frame {
     uint32_t function_index;
     /**
      * The function's name in the module's name section, as NUL-terminated UTF-8, or null when the
-     * module has no name section or the section doesn't name it.
+     * module has no name section or the section doesn't name it. A host function, which the module
+     * imports, has no name here.
      */
     const char *function_name;
     /**
      * Where in the module's bytes the instruction the function was at starts: in the innermost
      * frame, the instruction that trapped, and in every other, its call to the frame inside it.
-     * ::STASIS_NO_OFFSET when the backend can't say, as WAMR's fast interpreter never can.
+     * ::STASIS_NO_OFFSET when the backend can't say, as WAMR's fast interpreter never can, and for
+     * a host function, whose code isn't in the module.
      */
     uint32_t module_offset;
 } stasis_trap_frame;
@@ -566,8 +582,9 @@ typedef struct stasis_trap {
     /** What made the instance trap. */
     stasis_trap_kind kind;
     /**
-     * What happened, in English, as NUL-terminated UTF-8: the backend's description of a trap of
-     * WebAssembly's own. Its wording may change in any release.
+     * What happened, as NUL-terminated UTF-8: the backend's description of a trap of WebAssembly's
+     * own, and the host's message for ::STASIS_TRAP_KIND_HOST_ABORT. Every other message is in
+     * English, and its wording may change in any release.
      */
     const char *message;
     /** The number of frames. */
@@ -588,6 +605,23 @@ typedef struct stasis_trap {
  * when it hasn't trapped, or `instance` is null.
  */
 STASIS_API const stasis_trap *stasis_instance_trap(const stasis_instance *instance);
+
+/**
+ * @brief Ends the call into a script instance that a host function is part of, as a trap.
+ *
+ * A host function calls it on the instance that called it, which is running on the same thread.
+ * The host function then returns as it would otherwise, and Stasis ignores its result. The call
+ * traps as ::STASIS_TRAP_KIND_HOST_ABORT, with the message in its trap report, so the instance has
+ * trapped for good. Aborting again in the same call changes nothing: the first message stays.
+ *
+ * @param instance The script instance whose call to end.
+ * @param message Why, as NUL-terminated UTF-8, which Stasis copies.
+ * @return ::STASIS_OK once the call is to end. ::STASIS_OUT_OF_MEMORY when there was no memory to
+ * copy the message: the call still ends, but its trap report lacks the message.
+ * ::STASIS_REFUSED_NOT_RUNNING when the instance isn't running on this thread, which changes
+ * nothing, and ::STASIS_INVALID_ARGUMENT when `instance` or `message` is null.
+ */
+STASIS_API stasis_status stasis_abort(stasis_instance *instance, const char *message);
 
 #ifdef __cplusplus
 }

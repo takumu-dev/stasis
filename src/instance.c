@@ -17,9 +17,14 @@
 /* The room for WAMR's message when instantiating fails, which Stasis reads no further. */
 enum { WAMR_MESSAGE_SIZE = 128 };
 
+/* The instance that's running on this thread, if any. Calls into scripts never nest, so while it
+ * runs, no instance can be started or called on the thread, itself included. */
+static _Thread_local stasis_instance *running;
+
 /* Frees an instance's own memory, once WAMR's part of it is destroyed. */
 static void free_instance(stasis_instance *instance) {
     stasis_trap_record_free(&instance->trap);
+    stasis_deallocate(instance->scratch);
     stasis_deallocate((void *)instance->entry_points);
     stasis_deallocate(instance);
 }
@@ -42,6 +47,13 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
     if (created->entry_points == NULL) {
         free_instance(created);
         return STASIS_OUT_OF_MEMORY;
+    }
+    if (script->host_functions.scratch_size > 0) {
+        created->scratch = stasis_allocate(script->host_functions.scratch_size);
+        if (created->scratch == NULL) {
+            free_instance(created);
+            return STASIS_OUT_OF_MEMORY;
+        }
     }
 
     /* Each instance has its own execution environment, with the library's stack, and no heap of
@@ -75,6 +87,8 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
         return STASIS_OUT_OF_MEMORY;
     }
 
+    /* Host functions find the instance through its execution environment. */
+    wasm_runtime_set_user_data(created->exec_env, created);
     created->script = script;
     created->user_data = user_data;
     created->state = INSTANCE_CREATED;
@@ -98,20 +112,25 @@ static stasis_status run(stasis_instance *instance, wasm_function_inst_t functio
                          uint32_t result_count, wasm_val_t *results, uint32_t argument_count,
                          wasm_val_t *arguments) {
     instance->state = INSTANCE_RUNNING;
-    if (!wasm_runtime_call_wasm_a(instance->exec_env, function, result_count, results,
-                                  argument_count, arguments)) {
-        stasis_trap_record_init(&instance->trap, instance->module_instance,
-                                &instance->script->code);
-        instance->state = INSTANCE_TRAPPED;
-        return STASIS_TRAP;
+    running = instance;
+    const bool returned = wasm_runtime_call_wasm_a(instance->exec_env, function, result_count,
+                                                   results, argument_count, arguments);
+    running = NULL;
+    if (!returned) {
+        stasis_trap_record_init(&instance->trap, instance->module_instance, &instance->script->code,
+                                &instance->raised);
     }
-    instance->state = INSTANCE_READY;
-    return STASIS_OK;
+    stasis_raised_trap_clear(&instance->raised);
+    instance->state = returned ? INSTANCE_READY : INSTANCE_TRAPPED;
+    return returned ? STASIS_OK : STASIS_TRAP;
 }
 
 stasis_status stasis_instance_start(stasis_instance *instance) {
     if (instance == NULL) {
         return STASIS_INVALID_ARGUMENT;
+    }
+    if (running != NULL) {
+        return STASIS_REFUSED_NESTED;
     }
     switch (instance->state) {
     case INSTANCE_CREATED:
@@ -156,6 +175,9 @@ static stasis_status call(stasis_instance *instance, const stasis_interface *int
         return STASIS_INVALID_ARGUMENT;
     }
 
+    if (running != NULL) {
+        return STASIS_REFUSED_NESTED;
+    }
     switch (instance->state) {
     case INSTANCE_READY:
         break;
@@ -220,6 +242,19 @@ stasis_status stasis_instance_destroy(stasis_instance *instance) {
 
 void *stasis_instance_user_data(const stasis_instance *instance) {
     return instance == NULL ? NULL : instance->user_data;
+}
+
+stasis_status stasis_abort(stasis_instance *instance, const char *message) {
+    if (instance == NULL || message == NULL) {
+        return STASIS_INVALID_ARGUMENT;
+    }
+    if (instance != running) {
+        return STASIS_REFUSED_NOT_RUNNING;
+    }
+    if (!stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HOST_ABORT, "%s", message)) {
+        return STASIS_OUT_OF_MEMORY;
+    }
+    return STASIS_OK;
 }
 
 const stasis_trap *stasis_instance_trap(const stasis_instance *instance) {
