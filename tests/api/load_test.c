@@ -265,6 +265,106 @@ TEST(refuses_exports_that_stasis_cant_call) {
                    "nothing");
 }
 
+TEST(refuses_a_start_section) {
+    expect_refused(&test_calls_interface, "start_section", STASIS_INVALID_SCRIPT,
+                   "the script has a start section, which a backend runs whenever it creates an "
+                   "instance");
+}
+
+TEST(refuses_exports_that_a_backend_runs_by_itself) {
+    expect_refused(&test_calls_interface, "backend_exports", STASIS_INVALID_SCRIPT,
+                   "the script exports `_initialize`, which a backend runs by itself when it "
+                   "creates an instance\n"
+                   "the script exports `__wasm_call_ctors`, which a backend runs by itself when "
+                   "it creates an instance\n"
+                   "the script exports `__post_instantiate`, which a backend runs by itself when "
+                   "it creates an instance");
+}
+
+TEST(refuses_imports_that_arent_functions) {
+    expect_refused(&test_calls_interface, "non_function_imports", STASIS_INVALID_SCRIPT,
+                   "the script imports the global `count` from `test:calls/world@1`, where a "
+                   "script may import only functions\n"
+                   "the script imports the table `things` from `test:calls/world@1`, where a "
+                   "script may import only functions\n"
+                   "the script imports the memory `memory` from `test:calls/world@1`, where a "
+                   "script may import only functions");
+}
+
+TEST(refuses_imports_from_other_modules) {
+    expect_refused(&test_calls_interface, "foreign_imports", STASIS_INVALID_SCRIPT,
+                   "the script imports `log` from `env`, which is neither a group of "
+                   "`test:calls@1.2.0` nor `wasi_snapshot_preview1`\n"
+                   "the script imports `proc_exit` from `wasi_unstable`, which is neither a group "
+                   "of `test:calls@1.2.0` nor `wasi_snapshot_preview1`");
+}
+
+TEST(refuses_a_memory_that_starts_with_more_than_65535_pages) {
+    expect_refused(&test_calls_interface, "memory_too_large", STASIS_INVALID_SCRIPT,
+                   "the script's memory 0 starts with 65536 pages, more than the 65535 an "
+                   "instance may have");
+}
+
+/* Instantiating the script would copy each active segment into its memory or table, which has its
+ * minimum size until the script grows it. Passive and declared segments are never copied. */
+TEST(refuses_active_segments_that_dont_fit) {
+    expect_refused(&test_calls_interface, "segments_dont_fit", STASIS_INVALID_SCRIPT,
+                   "the script's data segment 1 needs its memory 0 to hold 65537 bytes, but it "
+                   "starts with 65536\n"
+                   "the script's data segment 3 needs its memory 0 to hold 4294967296 bytes, but "
+                   "it starts with 65536\n"
+                   "the script's element segment 1 needs its table 0 to hold 3 elements, but it "
+                   "starts with 2\n"
+                   "the script's element segment 2 needs its table 0 to hold 3 elements, but it "
+                   "starts with 2");
+}
+
+/* Segments that end where the memory or the table does fit, so an instance of the script can be
+ * created, with the data in its memory. */
+TEST(loads_active_segments_that_just_fit) {
+    stasis_library *library = create_library();
+    stasis_script *script = load_script(library, &test_calls_interface, "segments_fit");
+    stasis_instance *instance = start_instance(script);
+    uint32_t last = 0;
+    ASSERT_INT_EQ(test_calls_caller_starts(instance, &last), STASIS_OK);
+    ASSERT_UINT_EQ(last, 's');
+    destroy_all(instance, script, library);
+}
+
+/* The rules come after the signatures and the names, in the order the message lists them, so the
+ * status is the lacking entry point's. */
+TEST(lists_every_broken_rule_after_the_signatures_and_names) {
+    expect_refused(&test_calls_interface, "broken_rules", STASIS_INTERFACE_MISMATCH,
+                   "the script lacks the entry point `caller.starts`, which `test:calls@1.2.0` "
+                   "requires\n"
+                   "the export `test:calls/caller@1#Echo_u8:4618eff65f831824` doesn't parse as "
+                   "the name of an entry point\n"
+                   "the script has a start section, which a backend runs whenever it creates an "
+                   "instance\n"
+                   "the script exports `__wasm_call_ctors`, which a backend runs by itself when "
+                   "it creates an instance\n"
+                   "the script imports the global `seed` from `env`, where a script may import "
+                   "only functions\n"
+                   "the script imports `seed` from `env`, which is neither a group of "
+                   "`test:calls@1.2.0` nor `wasi_snapshot_preview1`\n"
+                   "the script's element segment 0 needs its table 0 to hold 2 elements, but it "
+                   "starts with 1\n"
+                   "the script's memory 0 starts with 65536 pages, more than the 65535 an "
+                   "instance may have");
+}
+
+/* A script with a shared memory, or with more than one memory, wouldn't be snapshottable. WAMR, as
+ * Stasis builds it, doesn't take either for valid WebAssembly. */
+TEST(refuses_a_shared_memory) {
+    expect_refused(&test_calls_interface, "shared_memory", STASIS_INVALID_MODULE,
+                   "WASM module load failed: invalid limits flags");
+}
+
+TEST(refuses_more_than_one_memory) {
+    expect_refused(&test_calls_interface, "two_memories", STASIS_INVALID_MODULE,
+                   "WASM module load failed: multiple memories");
+}
+
 /* A message that doesn't fit is cut short, and still ends in a NUL. */
 TEST(cuts_a_message_short_where_the_buffer_ends) {
     stasis_library *library = create_library();
@@ -342,6 +442,14 @@ TEST_LIST(TEST_CASE(loads_a_script_and_writes_an_empty_message),
           TEST_CASE(refuses_an_entry_point_with_another_signature),
           TEST_CASE(lists_every_problem_with_the_first_ones_status),
           TEST_CASE(refuses_names_that_dont_parse_or_disagree),
-          TEST_CASE(refuses_exports_that_stasis_cant_call),
+          TEST_CASE(refuses_exports_that_stasis_cant_call), TEST_CASE(refuses_a_start_section),
+          TEST_CASE(refuses_exports_that_a_backend_runs_by_itself),
+          TEST_CASE(refuses_imports_that_arent_functions),
+          TEST_CASE(refuses_imports_from_other_modules),
+          TEST_CASE(refuses_a_memory_that_starts_with_more_than_65535_pages),
+          TEST_CASE(refuses_active_segments_that_dont_fit),
+          TEST_CASE(loads_active_segments_that_just_fit),
+          TEST_CASE(lists_every_broken_rule_after_the_signatures_and_names),
+          TEST_CASE(refuses_a_shared_memory), TEST_CASE(refuses_more_than_one_memory),
           TEST_CASE(cuts_a_message_short_where_the_buffer_ends),
           TEST_CASE(refuses_a_newer_descriptor_format), TEST_CASE(refuses_bad_arguments));

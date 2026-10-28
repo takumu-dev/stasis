@@ -9,6 +9,7 @@
 #include "objects.h"
 #include "platform.h"
 #include "signature.h"
+#include "snapshottable.h"
 
 #include <limits.h>
 #include <stdarg.h>
@@ -22,6 +23,10 @@
 /* The prefix of the exports that free an entry point's results, which the name of the entry
  * point's export follows. */
 static const char post_return_prefix[] = "cabi_post_";
+
+/* The module that a script imports the system interface from, the only one it may import from
+ * besides its interface's groups. */
+#define SYSTEM_INTERFACE_MODULE "wasi_snapshot_preview1"
 
 /* The room for WAMR's message when its loader refuses a module. */
 enum { WAMR_MESSAGE_SIZE = 256 };
@@ -302,22 +307,6 @@ static void check_names(struct load *load) {
     }
 }
 
-/* How a message spells a core value type. */
-static const char *core_type_name(uint8_t type) {
-    switch (type) {
-    case MODULE_I32:
-        return "i32";
-    case MODULE_I64:
-        return "i64";
-    case MODULE_F32:
-        return "f32";
-    case MODULE_F64:
-        return "f64";
-    default:
-        return "?";
-    }
-}
-
 /* Adds as much of `text` as fits to the string of `*length` bytes in the `size` bytes at
  * `buffer`. */
 static void append(char *buffer, size_t size, size_t *length, const char *text) {
@@ -338,7 +327,7 @@ static void append_types(char *buffer, size_t size, size_t *length, const uint8_
         if (i > 0) {
             append(buffer, size, length, ", ");
         }
-        append(buffer, size, length, core_type_name(types[i]));
+        append(buffer, size, length, stasis_module_type_name(types[i]));
     }
     append(buffer, size, length, ")");
 }
@@ -424,6 +413,123 @@ static bool check_exports(struct load *load) {
     return true;
 }
 
+/* Whether an export's name is that of a function some backend runs by itself when it creates an
+ * instance, as it would a start section: WAMR runs `__wasm_call_ctors` and `__post_instantiate`,
+ * and with its own system interface, `_initialize`. */
+static bool runs_by_itself(stasis_string name) {
+    static const char *const names[] = {"_initialize", "__wasm_call_ctors", "__post_instantiate"};
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        if (stasis_string_is(name, names[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* How a message names a kind of import. */
+static const char *import_kind_name(uint8_t kind) {
+    switch (kind) {
+    case MODULE_TABLE:
+        return "table";
+    case MODULE_MEMORY:
+        return "memory";
+    case MODULE_GLOBAL:
+        return "global";
+    default:
+        return "function";
+    }
+}
+
+/* Notes a problem if an active segment, number `number` among those of its `kind`, ends past
+ * `size`, the number of `units` that the `target` it's copied into starts with. */
+static void check_fit(struct load *load, const char *kind, uint32_t number,
+                      const struct module_segment *segment, const char *target, uint64_t size,
+                      const char *units) {
+    const uint64_t end = (uint64_t)segment->offset + segment->size;
+    if (end > size) {
+        problem(load, STASIS_INVALID_SCRIPT,
+                "the script's %s segment %lu needs its %s %lu to hold %llu %s, but it starts with "
+                "%llu",
+                kind, (unsigned long)number, target, (unsigned long)segment->index,
+                (unsigned long long)end, units, (unsigned long long)size);
+    }
+}
+
+/* The problems with the active segments, each of which must fit the memory or the table it's copied
+ * into as that starts, or instantiating the script would trap. A segment of an imported memory or
+ * table, or whose offset reads an imported global, is left alone: a script may import neither. */
+static void check_segments(struct load *load) {
+    const struct module *module = &load->module;
+    for (uint32_t i = 0; i < module->data_segment_count; i++) {
+        const struct module_segment *segment = &module->data_segments[i];
+        const struct module_memory *memory = stasis_module_memory(module, segment->index);
+        if (segment->active && segment->constant_offset && memory != NULL) {
+            check_fit(load, "data", i, segment, "memory",
+                      (uint64_t)memory->minimum * MODULE_PAGE_SIZE, "bytes");
+        }
+    }
+    for (uint32_t i = 0; i < module->element_segment_count; i++) {
+        const struct module_segment *segment = &module->element_segments[i];
+        const struct module_table *table = stasis_module_table(module, segment->index);
+        if (segment->active && segment->constant_offset && table != NULL) {
+            check_fit(load, "element", i, segment, "table", table->minimum, "elements");
+        }
+    }
+}
+
+/* The problems with what the script holds, which break Stasis's rules for scripts: a start
+ * section, an export a backend runs by itself, an import that isn't a function, one from a module
+ * other than the interface's groups and the system interface, an active segment that doesn't fit,
+ * and a memory that starts larger than an instance may have. */
+static void check_rules(struct load *load) {
+    if (load->module.has_start) {
+        problem(load, STASIS_INVALID_SCRIPT,
+                "the script has a start section, which a backend runs whenever it creates an "
+                "instance");
+    }
+    for (uint32_t i = 0; i < load->module.export_count; i++) {
+        const stasis_string name = load->module.exports[i].name;
+        if (runs_by_itself(name)) {
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script exports `%.*s`, which a backend runs by itself when it creates an "
+                    "instance",
+                    printed(name), name.data);
+        }
+    }
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        const struct module_import *import = &load->module.imports[i];
+        if (import->kind != MODULE_FUNCTION) {
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script imports the %s `%.*s` from `%.*s`, where a script may import only "
+                    "functions",
+                    import_kind_name(import->kind), printed(import->field), import->field.data,
+                    printed(import->module), import->module.data);
+        }
+    }
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        const struct module_import *import = &load->module.imports[i];
+        if (!load->imports[i].wire && !stasis_string_is(import->module, SYSTEM_INTERFACE_MODULE)) {
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script imports `%.*s` from `%.*s`, which is neither a group "
+                    "of " INTERFACE_FORMAT " nor `" SYSTEM_INTERFACE_MODULE "`",
+                    printed(import->field), import->field.data, printed(import->module),
+                    import->module.data, INTERFACE_ARGUMENTS(load->interface_data));
+        }
+    }
+    check_segments(load);
+    for (uint32_t i = 0; i < load->module.memory_count; i++) {
+        const uint32_t index = load->module.memory_import_count + i;
+        const uint32_t minimum = load->module.memories[i].minimum;
+        if (minimum > STASIS_MAX_MEMORY_PAGES) {
+            problem(load, STASIS_INVALID_SCRIPT,
+                    "the script's memory %lu starts with %lu pages, more than the %lu an instance "
+                    "may have",
+                    (unsigned long)index, (unsigned long)minimum,
+                    (unsigned long)STASIS_MAX_MEMORY_PAGES);
+        }
+    }
+}
+
 /* Runs the load check on a module that WAMR has found valid. Returns STASIS_OK, the status of the
  * first problem, or STASIS_INVALID_ARGUMENT if the interface's descriptors are malformed. */
 static stasis_status check(struct load *load) {
@@ -447,6 +553,7 @@ static stasis_status check(struct load *load) {
     if (!check_exports(load)) {
         return STASIS_INVALID_ARGUMENT;
     }
+    check_rules(load);
     return load->status;
 }
 
@@ -479,12 +586,14 @@ static void free_script(stasis_script *script) {
         }
     }
     stasis_deallocate((void *)script->entry_points);
+    stasis_deallocate(script->unsnapshottable);
     stasis_deallocate(script->bytes);
     stasis_deallocate(script);
 }
 
-/* Fills in what a script that has passed the load check keeps of the check: its identity, and the
- * export name of each entry point it provides. Returns false if there's no memory for it. */
+/* Fills in what a script that has passed the load check keeps of the check: its identity, the
+ * export name of each entry point it provides, and why it isn't snapshottable. Returns false if
+ * there's no memory for it. */
 static bool keep_check(stasis_script *script, const struct load *load) {
     memcpy(script->identity, load->module.identity, sizeof script->identity);
     script->entry_point_count = load->kind->entry_point_count;
@@ -505,6 +614,19 @@ static bool keep_check(stasis_script *script, const struct load *load) {
         if (stasis_string_is(load->module.exports[i].name, STASIS_INITIALIZE_NAME)) {
             script->initializes = true;
         }
+    }
+    /* The reason is measured first, and then written. */
+    struct message reason;
+    stasis_message_init(&reason, NULL, 0);
+    stasis_explain_unsnapshottable(&load->module, &reason);
+    if (reason.lines > 0) {
+        const size_t size = reason.total + 1;
+        script->unsnapshottable = stasis_allocate(size);
+        if (script->unsnapshottable == NULL) {
+            return false;
+        }
+        stasis_message_init(&reason, script->unsnapshottable, size);
+        stasis_explain_unsnapshottable(&load->module, &reason);
     }
     return true;
 }
@@ -625,6 +747,16 @@ stasis_status stasis_script_destroy(stasis_script *script) {
 
 const uint8_t *stasis_script_identity(const stasis_script *script) {
     return script == NULL ? NULL : script->identity;
+}
+
+bool stasis_script_snapshottable(const stasis_script *script, const char **reason) {
+    if (reason != NULL) {
+        *reason = script == NULL ? NULL : script->unsnapshottable;
+    }
+    if (script == NULL) {
+        return false;
+    }
+    return script->unsnapshottable == NULL;
 }
 
 bool stasis_script_provides(const stasis_script *script, uint32_t entry_point) {

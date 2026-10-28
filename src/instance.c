@@ -13,10 +13,6 @@
 #include <string.h>
 #include <wasm_export.h>
 
-/* The most pages of linear memory an instance may have, whatever its module allows. WAMR passes
- * sizes to its allocator in 32 bits, which 65,536 pages would overflow. */
-enum { MAX_MEMORY_PAGES = 65535 };
-
 /* The room for WAMR's message when instantiating fails, which Stasis reads no further. */
 enum { WAMR_MESSAGE_SIZE = 128 };
 
@@ -48,14 +44,16 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
 
     /* Each instance has its own execution environment, with the library's stack, and no heap of
      * WAMR's inside its memory. Every failure to instantiate is taken for a lack of memory, which
-     * is all it can be once loading turns away every module WAMR can't instantiate for another
-     * reason. So far it doesn't, for a module whose segments don't fit, for one. */
+     * is all it can be, since loading turns away every module that WAMR can't instantiate for
+     * another reason, or would run code in while instantiating: one that imports anything but
+     * functions, has a start section or exports a function a backend runs by itself, has a segment
+     * that doesn't fit, or has a memory that starts larger than an instance may have. */
     const uint32_t stack_size = script->library->stack_size;
     InstantiationArgs args;
     memset(&args, 0, sizeof args);
     args.default_stack_size = stack_size;
     args.host_managed_heap_size = 0;
-    args.max_memory_pages = MAX_MEMORY_PAGES;
+    args.max_memory_pages = STASIS_MAX_MEMORY_PAGES;
     char wamr_message[WAMR_MESSAGE_SIZE];
     stasis_lock();
     created->module_instance =

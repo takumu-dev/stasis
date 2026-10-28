@@ -4,10 +4,10 @@ Stasis is a game scripting library. It runs scripts compiled to WebAssembly in a
 game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, a host can load a script against its
-interface, create and start instances of it, and call their entry points with scalar arguments and
-results. The generator checks interface files and writes their host side and their WIT rendering.
-Host functions, strings, records, handles, the system interface, trap reports and snapshots are
-still to come.
+interface, learn whether it's snapshottable, create and start instances of it, and call their entry
+points with scalar arguments and results. The generator checks interface files and writes their
+host side and their WIT rendering. Host functions, strings, records, handles, the system interface,
+trap reports and snapshots are still to come.
 
 ## Requirements
 
@@ -440,12 +440,29 @@ stasis_library_destroy(library);
   (`STASIS_INVALID_MODULE`), built for the interface (`STASIS_WRONG_INTERFACE`), and for its line
   (`STASIS_INCOMPATIBLE_VERSION`), which is the major version, or under 0.x the major and minor
   versions. Then it lists every problem it finds: a required entry point missing or an entry point
-  with another signature (`STASIS_INTERFACE_MISMATCH`), and names that don't parse or disagree
-  (`STASIS_INVALID_SCRIPT`). A script built against an older or newer minor version loads, and an
-  entry point that the host's interface lacks is ignored.
+  with another signature (`STASIS_INTERFACE_MISMATCH`), and names that don't parse or disagree, or
+  a broken rule (`STASIS_INVALID_SCRIPT`). A script built against an older or newer minor version
+  loads, and an entry point that the host's interface lacks is ignored.
+- Stasis's rules make sure that creating an instance runs no script code and fails only for lack
+  of memory. A script has no start section, and exports none of `_initialize`, `__wasm_call_ctors`
+  and `__post_instantiate`, which a backend would run by itself. It imports only functions, from
+  its interface's groups and `wasi_snapshot_preview1`. Its active data and element segments fit
+  its memory and its tables as they start, and its memory starts with at most 65,535 pages.
 - A loaded script answers its identity, the SHA-256 of its module's sections without the custom
   ones, so a copy stripped of its debug information is the same script, and which optional entry
   points it provides.
+- It also answers whether it's snapshottable, and if not, why, one problem a line. A snapshottable
+  script defines and exports one memory that isn't shared, exports every mutable global it defines,
+  each a number, and contains none of `table.set`, `table.grow`, `table.fill`, `table.copy`,
+  `table.init`, `elem.drop` and `data.drop`. A script that isn't snapshottable still loads and
+  runs:
+
+  ```c
+  const char *reason = NULL;
+  if (!stasis_script_snapshottable(script, &reason)) {
+      /* reason says why, such as "global 3 is mutable but not exported" */
+  }
+  ```
 - Creating an instance runs no script code. Starting runs the script's `stasis_initialize` once, if
   it exports one, and only a started instance can be called. A call that traps returns
   `STASIS_TRAP`, and the instance refuses every later call.

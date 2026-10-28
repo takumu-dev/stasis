@@ -1,5 +1,6 @@
-/* The message that loading writes into the host's buffer: a NUL-terminated line for each problem,
- * cut short where the buffer ends, as WAMR's error buffers are. */
+/* A message of a line for each problem, NUL-terminated and cut short where its buffer ends, as
+ * WAMR's error buffers are: the one loading writes into the host's buffer, and the reason a script
+ * isn't snapshottable. A message written into no buffer at all measures how long it would be. */
 
 #ifndef STASIS_MESSAGE_H
 #define STASIS_MESSAGE_H
@@ -24,6 +25,8 @@ struct message {
     size_t length;
     /* The number of lines written, including any cut off. */
     size_t lines;
+    /* The length of the whole message, however much of it the buffer holds. */
+    size_t total;
 };
 
 /* Starts a message in `buffer`, which holds `size` bytes, and writes it empty. */

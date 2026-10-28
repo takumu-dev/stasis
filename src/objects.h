@@ -15,6 +15,10 @@
 /* The export that initialises a new instance, which Stasis calls when it starts. */
 #define STASIS_INITIALIZE_NAME "stasis_initialize"
 
+/* The most pages of linear memory an instance may have, whatever its module allows. WAMR passes
+ * sizes to its allocator in 32 bits, which 65,536 pages would overflow. */
+enum { STASIS_MAX_MEMORY_PAGES = 65535 };
+
 struct stasis_library {
     /* The host's settings, as it gave them. */
     stasis_library_settings settings;
@@ -38,6 +42,8 @@ struct stasis_script {
     size_t entry_point_count;
     /* Whether the script exports stasis_initialize. */
     bool initializes;
+    /* Why the script isn't snapshottable, one problem a line, or null when it is. */
+    char *unsnapshottable;
     /* The number of the script's instances that haven't been destroyed. */
     size_t instance_count;
 };
