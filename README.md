@@ -6,9 +6,10 @@ game, and saves and restores their state as snapshots.
 Stasis is at an early stage and has no release yet. So far, a host can load a script against its
 interface, learn whether it's snapshottable, create and start instances of it, call their entry
 points and have scripts call its host functions, with scalars, strings, records and handles as
-arguments and results, revoke handles, and read the trap report of an instance that traps. The
-generator checks interface files and writes their host side and their WIT rendering. The system
-interface and snapshots are still to come.
+arguments and results, revoke handles, answer the system interface through its hooks, read the
+trap report of an instance that traps, and snapshot instances and restore them. The generator
+checks interface files and writes their host side and their WIT rendering. The C language pack's
+bindings are still to come.
 
 ## Requirements
 
@@ -472,14 +473,14 @@ stasis_library_destroy(library);
   ```
 - Creating an instance runs no script code. Starting runs the script's `stasis_initialize` once, if
   it exports one, and only a started instance can be called.
-- Starting an instance or calling it may trap, which returns `STASIS_TRAP` and ends the instance
-  for good: every later start or call is refused with `STASIS_REFUSED_TRAPPED`, and the host
-  recovers by creating another. Until it's destroyed, the instance keeps its trap report: the kind
-  of trap, whatever the backend, the backend's message, and the call stack, innermost frame first.
-  Each frame names its function by its index, and by its name if the module's name section gives
-  one. With the classic interpreter, each frame also has the offset in the module of the
-  instruction it was at: the one that trapped, or the call to the frame inside it. With the fast
-  interpreter, that's `STASIS_NO_OFFSET`.
+- Starting an instance or calling it may trap, which returns `STASIS_TRAP` and ends the instance for
+  good: every later start or call is refused with `STASIS_REFUSED_TRAPPED`, and the host recovers by
+  creating another, or by restoring an earlier snapshot. Until it's destroyed, the instance keeps
+  its trap report: the kind of trap, whatever the backend, the backend's message, and the call
+  stack, innermost frame first. Each frame names its function by its index, and by its name if the
+  module's name section gives one. With the classic interpreter, each frame also has the offset in
+  the module of the instruction it was at: the one that trapped, or the call to the frame inside it.
+  With the fast interpreter, that's `STASIS_NO_OFFSET`.
 
   ```c
   if (acme_dungeon_npc_tick(instance, frame) == STASIS_TRAP) {
@@ -717,3 +718,79 @@ stasis_library_create(&settings, &library);
 - Each hook runs inside the call into the instance it acts for, as a host function does, so it may
   end the call with `stasis_abort`, and it can call into no script. A host can't turn the system
   interface off: without hooks, it already reaches nothing.
+
+### Snapshots
+
+A snapshot is an instance's whole state, as bytes that the host keeps wherever it likes, such as
+in its save files: the instance's linear memory, its mutable globals and its handles, without the
+host objects they name. Restoring it creates a new instance that carries on exactly as the original
+would have: given the same calls and the same answers from the host, it returns the same results,
+calls the same host functions, writes the same output and gives the same snapshots.
+
+```c
+size_t size = 0;
+stasis_instance_snapshot_size(instance, &size);
+/* the host grows its buffer if it has to, and may reuse it for every snapshot */
+stasis_instance_snapshot(instance, buffer, buffer_capacity, &size);
+
+size_t count = 0;
+stasis_instance_handle_count(instance, &count);
+stasis_handle *handles = game_allocate(count * sizeof *handles);
+stasis_instance_handles(instance, handles, count, &count);
+/* the save records which of the game's objects each handle names */
+```
+
+Later, perhaps in another process, build or platform:
+
+```c
+/* each handle's host object is swapped for the one now behind it, or null for one that's gone */
+for (size_t i = 0; i < count; i++) {
+    handles[i].host_object = game_object_now(save, handles[i].host_object);
+}
+char message[256];
+stasis_instance *restored = NULL;
+if (stasis_instance_restore(script, bytes, size, handles, count, entity, message,
+                            sizeof message, &restored) != STASIS_OK) {
+    /* message names the check that failed, or the handle */
+}
+```
+
+- Only a ready instance of a snapshottable script can be snapshotted: snapshotting one that isn't
+  is refused with `STASIS_REFUSED_NOT_SNAPSHOTTABLE`, `STASIS_REFUSED_RUNNING`,
+  `STASIS_REFUSED_TRAPPED` or `STASIS_REFUSED_NOT_STARTED`. So a snapshot is taken between calls,
+  and holds nothing of a call's. A buffer smaller than the snapshot is `STASIS_BUFFER_TOO_SMALL`,
+  as is an array smaller than the number of live handles. Listing handles runs no script code, so
+  it's allowed in every state.
+- Everything a script can change is in its snapshot, so a script needs no save logic of its own: a C
+  script's heap, its statics, its `rand()` state and a line of stdout that hasn't been written out
+  yet, since it waits in the script's memory, all travel in snapshots.
+- Nothing about where a snapshot was taken goes in, so the same state gives the same bytes in every
+  build of Stasis, on every platform and with either interpreter, and comparing two snapshots tells
+  whether two instances have the same state, as replays and desync checks need.
+- A restored instance is ready at once, and never started, since its snapshot already holds
+  everything its initialisation did. It's a new instance with user data of its own: a restore
+  never changes an existing instance.
+- A snapshot restores only into its own script, the one with the same identity, which may have been
+  stripped of its custom sections. Another script's snapshot is refused with `STASIS_WRONG_SCRIPT`,
+  and a snapshot in a newer format than the release knows with `STASIS_SNAPSHOT_TOO_NEW`. Every
+  release restores the snapshots of every earlier release.
+- A snapshot is untrusted input, as a script is, so a tampered save file can't end or corrupt the
+  game. A restore checks it whole before it creates anything, and refuses one that's malformed with
+  `STASIS_INVALID_SNAPSHOT`: another magic number, a memory that isn't a whole number of pages or
+  lies outside the limits of the script's memory, globals that aren't the script's mutable globals,
+  each of its type, or handles outside the range of values the snapshot records as issued, or of a
+  kind the interface lacks. Its memory can only put the script into a strange state, inside its
+  sandbox, where a handle it was never given still traps.
+- A restore binds every live handle at once, from an array with one entry for each, in any order,
+  which names its value and kind as they were listed, and the host object now behind it, or null to
+  revoke it. An array that leaves out a live handle, gives one twice, gives one a host object of
+  another kind, gives a handle that wasn't live, or binds two handles to the same host object fails
+  with `STASIS_INVALID_BINDINGS`, and the restore creates nothing.
+- Handles are never reused, across snapshots and restores too: the snapshot records the next value,
+  so a handle that was revoked before it was taken stays revoked, and a host object new to the
+  restored instance gets a value the instance has never had.
+- A restore copies what it needs of the snapshot, so the host may free it once the restore returns.
+- A snapshot is Stasis's own format, every field little-endian: a magic number, the format's
+  version and the script's identity, then the memory's length, the mutable globals by index, the
+  handle table, with the next value and each live handle's value and kind by its qualified name,
+  such as `world.entity`, in increasing order of value, and last the memory's bytes.

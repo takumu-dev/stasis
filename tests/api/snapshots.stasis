@@ -1,0 +1,52 @@
+/// Entry points of a script whose state lies in its memory, in mutable globals of every numeric type
+/// and in its handles, which the tests of snapshots and restores call.
+interface test:snapshots@1.0.0;
+
+group world {
+    /// Anything that lives in the world.
+    object entity {}
+
+    /// Something an entity carries, a kind of host object apart from entities.
+    object item {}
+
+    /// Each returns the host object at `index` of the test's own.
+    fn find(index: u32) -> entity;
+    fn pick_up(index: u32) -> item;
+    /// Records the host object it's given.
+    fn touch(target: entity);
+}
+
+script keeper {
+    uses world;
+
+    /// Returns how many times `stasis_initialize` has run in the instance.
+    fn starts() -> u32;
+
+    /// Sets the script's mutable globals of each type.
+    fn set_globals(a: u32, b: u64, c: f32, d: f64);
+    /// Each returns the mutable global of its type.
+    fn global_i32() -> u32;
+    fn global_i64() -> u64;
+    fn global_f32() -> f32;
+    fn global_f64() -> f64;
+
+    /// Grows the script's memory by `pages`, and returns how many pages it had before, or
+    /// 4294967295 if it couldn't grow.
+    fn grow(pages: u32) -> u32;
+    /// Returns the number of pages of the script's memory.
+    fn pages() -> u32;
+    /// Stores `value` at `address` in the script's memory, as 4 bytes, little-endian.
+    fn store(address: u32, value: u32);
+    /// Returns the 4 bytes at `address` in the script's memory, little-endian.
+    fn load(address: u32) -> u32;
+
+    /// Keeps a copy of `text`, which `recall` returns.
+    fn remember(text: string);
+    fn recall() -> string;
+
+    /// Each calls the host function of its name, and returns the handle it returns, as a number.
+    fn find(index: u32) -> u32;
+    fn pick_up(index: u32) -> u32;
+    /// Calls `world.touch` with the handle `target`, as it is.
+    fn touch(target: u32);
+}

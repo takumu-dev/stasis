@@ -11,6 +11,7 @@
 #include "host_functions.h"
 #include "layout.h"
 #include "module.h"
+#include "snapshot_format.h"
 #include "trap.h"
 
 #include <stdbool.h>
@@ -58,6 +59,12 @@ struct stasis_script {
     bool initializes;
     /* Why the script isn't snapshottable, one problem a line, or null when it is. */
     char *unsnapshottable;
+    /* What a snapshottable script's snapshots must agree with, which points into the script, and
+     * the name each of its mutable globals is exported as, by its place among them. A script that
+     * isn't snapshottable has neither. */
+    struct snapshot_script snapshot_rules;
+    struct snapshot_global *globals;
+    char **global_names;
     /* Where the module's code is, which turns where WAMR says a frame of a trap report was into the
      * instruction it was at. It's empty when WAMR doesn't say. */
     struct module_code code;
@@ -98,6 +105,9 @@ struct stasis_instance {
     wasm_function_inst_t reallocate;
     /* The cabi_post_* of each entry point, by id, or null for one the script doesn't export. */
     wasm_function_inst_t *post_returns;
+    /* Where WAMR keeps the value of each of a snapshottable script's mutable globals, by its place
+     * among them. */
+    void **global_values;
     /* Which of those Stasis is inside of, and for a cabi_post_*, its entry point. */
     enum inside inside;
     const stasis_entry_point *post_returning;

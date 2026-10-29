@@ -14,6 +14,7 @@
 #   handles.*        handles crossing both ways, the checks on them, and revoking them
 #   allocations.*    what calls with strings allocate, which the test-only library counts
 #   handle_limit.*   instances running out of handles, under the test-only library's lower limit
+#   snapshots.*      snapshots of instances, their handles, and restoring them into new instances
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
 #   c_library.*      what a C script's standard library does through the system interface
@@ -34,6 +35,7 @@ stasis_generate(host hosts.stasis OUTPUT_DIRECTORY generated VARIABLE hosts_host
 stasis_generate(host strings.stasis OUTPUT_DIRECTORY generated VARIABLE strings_host)
 stasis_generate(host records.stasis OUTPUT_DIRECTORY generated VARIABLE records_host)
 stasis_generate(host handles.stasis OUTPUT_DIRECTORY generated VARIABLE handles_host)
+stasis_generate(host snapshots.stasis OUTPUT_DIRECTORY generated VARIABLE snapshots_host)
 stasis_generate(host system.stasis OUTPUT_DIRECTORY generated VARIABLE system_host)
 
 set(scripts
@@ -78,6 +80,7 @@ set(scripts
     segments_dont_fit
     segments_fit
     shared_memory
+    snapshots
     start_section
     strings
     system
@@ -217,6 +220,14 @@ stasis_add_test(handle_limit handle_limit_test.c handle_hosts.c handle_hosts.h t
 target_link_libraries(stasis_test_handle_limit PRIVATE
     stasis_api_support_testing
     stasis_test_handles_interface_testing
+)
+
+# So does the host side of snapshots.stasis, whose host functions the program of snapshots defines.
+stasis_add_host_sides(stasis_test_snapshots_interface stasis::stasis ${snapshots_host})
+stasis_add_test(snapshots snapshots_test.c)
+target_link_libraries(stasis_test_snapshots PRIVATE
+    stasis_api_support
+    stasis_test_snapshots_interface
 )
 
 # The load tests work out a script's identity apart from the library, with SHA-256 alone.

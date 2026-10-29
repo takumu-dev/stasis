@@ -56,10 +56,12 @@ struct module_table {
     uint32_t minimum;
 };
 
-/* A memory the module defines: the number of pages it starts with, whether it's shared, and
- * whether the module exports it. */
+/* A memory the module defines: the number of pages it starts with, the most it may grow to if it
+ * says, whether it's shared, and whether the module exports it. */
 struct module_memory {
     uint32_t minimum;
+    bool has_maximum;
+    uint32_t maximum;
     bool shared;
     bool exported;
 };

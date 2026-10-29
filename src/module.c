@@ -189,22 +189,29 @@ static uint32_t read_count(struct reader *reader, size_t least) {
     return count;
 }
 
-/* Reads a table's or a memory's limits: a flag, the minimum, which it returns, and the maximum if
- * the flag says there is one. Unless `shared` is null, it's set to whether the flag says it's
- * shared. */
-static uint32_t read_limits(struct reader *reader, bool *shared) {
+/* A table's or a memory's limits. */
+struct limits {
+    uint32_t minimum;
+    bool has_maximum;
+    uint32_t maximum;
+    bool shared;
+};
+
+/* Reads a table's or a memory's limits: a flag, which says whether there's a maximum and whether
+ * it's shared, the minimum, and the maximum if there is one. */
+static struct limits read_limits(struct reader *reader) {
+    struct limits limits = {0, false, 0, false};
     const uint8_t flags = read_byte(reader);
     if (flags > 3) {
         reader->failed = true;
     }
-    const uint32_t minimum = read_u32(reader);
-    if ((flags & 1) != 0) {
-        (void)read_u32(reader);
+    limits.minimum = read_u32(reader);
+    limits.has_maximum = (flags & 1) != 0;
+    if (limits.has_maximum) {
+        limits.maximum = read_u32(reader);
     }
-    if (shared != NULL) {
-        *shared = (flags & 2) != 0;
-    }
-    return minimum;
+    limits.shared = (flags & 2) != 0;
+    return limits;
 }
 
 /* Reads `count` unsigned LEB128 numbers of at most 32 bits, such as indices, which the reader
@@ -401,11 +408,11 @@ static enum module_read read_imports(struct module *module, struct reader *reade
             break;
         case MODULE_TABLE:
             (void)read_byte(reader);
-            (void)read_limits(reader, NULL);
+            (void)read_limits(reader);
             module->table_import_count++;
             break;
         case MODULE_MEMORY:
-            (void)read_limits(reader, NULL);
+            (void)read_limits(reader);
             module->memory_import_count++;
             break;
         case MODULE_GLOBAL:
@@ -445,12 +452,12 @@ static enum module_read read_tables(struct module *module, struct reader *reader
     module->table_count = count;
     for (uint32_t i = 0; i < count; i++) {
         (void)read_byte(reader);
-        module->tables[i].minimum = read_limits(reader, NULL);
+        module->tables[i].minimum = read_limits(reader).minimum;
     }
     return MODULE_READ_OK;
 }
 
-/* Reads the memory section: each memory's minimum and whether it's shared. */
+/* Reads the memory section: each memory's limits and whether it's shared. */
 static enum module_read read_memories(struct module *module, struct reader *reader) {
     const uint32_t count = read_count(reader, 2);
     module->memories = stasis_allocate_zeroed(count, sizeof *module->memories);
@@ -459,7 +466,12 @@ static enum module_read read_memories(struct module *module, struct reader *read
     }
     module->memory_count = count;
     for (uint32_t i = 0; i < count; i++) {
-        module->memories[i].minimum = read_limits(reader, &module->memories[i].shared);
+        const struct limits limits = read_limits(reader);
+        struct module_memory *memory = &module->memories[i];
+        memory->minimum = limits.minimum;
+        memory->has_maximum = limits.has_maximum;
+        memory->maximum = limits.maximum;
+        memory->shared = limits.shared;
     }
     return MODULE_READ_OK;
 }

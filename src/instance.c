@@ -1,3 +1,5 @@
+#include "instance.h"
+
 #include <stasis.h>
 #include <stasis_interface.h>
 
@@ -32,18 +34,29 @@ static void free_instance(stasis_instance *instance) {
     stasis_deallocate(instance->results);
     stasis_deallocate((void *)instance->entry_points);
     stasis_deallocate((void *)instance->post_returns);
+    stasis_deallocate((void *)instance->global_values);
     stasis_deallocate(instance);
 }
 
-stasis_status stasis_instance_create(stasis_script *script, void *user_data,
-                                     stasis_instance **instance) {
-    if (instance == NULL) {
-        return STASIS_INVALID_ARGUMENT;
+/* Finds where WAMR keeps the value of each of a snapshottable script's mutable globals, by the
+ * name the script exports it as, which finds no other export, since export names differ and WAMR's
+ * loader refuses one that holds a NUL. Returns false if one isn't there, which loading makes sure
+ * can't happen. */
+static bool find_globals(stasis_instance *instance) {
+    const stasis_script *script = instance->script;
+    for (size_t i = 0; i < script->snapshot_rules.global_count; i++) {
+        wasm_global_inst_t global;
+        if (!wasm_runtime_get_export_global_inst(instance->module_instance, script->global_names[i],
+                                                 &global)) {
+            return false;
+        }
+        instance->global_values[i] = global.global_data;
     }
-    *instance = NULL;
-    if (script == NULL) {
-        return STASIS_INVALID_ARGUMENT;
-    }
+    return true;
+}
+
+stasis_status stasis_instance_new(stasis_script *script, void *user_data,
+                                  stasis_instance **instance) {
     stasis_instance *created = stasis_allocate_zeroed(1, sizeof *created);
     if (created == NULL) {
         return STASIS_OUT_OF_MEMORY;
@@ -53,7 +66,10 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
         script->entry_point_count, sizeof *created->entry_points);
     created->post_returns = (wasm_function_inst_t *)stasis_allocate_zeroed(
         script->entry_point_count, sizeof *created->post_returns);
-    if (created->entry_points == NULL || created->post_returns == NULL) {
+    created->global_values = (void **)stasis_allocate_zeroed(script->snapshot_rules.global_count,
+                                                             sizeof *created->global_values);
+    if (created->entry_points == NULL || created->post_returns == NULL ||
+        created->global_values == NULL) {
         free_instance(created);
         return STASIS_OUT_OF_MEMORY;
     }
@@ -117,8 +133,24 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
                 wasm_runtime_lookup_function(created->module_instance, script->post_returns[id]);
         }
     }
+    if (!find_globals(created)) {
+        (void)stasis_instance_destroy(created);
+        return STASIS_OUT_OF_MEMORY;
+    }
     *instance = created;
     return STASIS_OK;
+}
+
+stasis_status stasis_instance_create(stasis_script *script, void *user_data,
+                                     stasis_instance **instance) {
+    if (instance == NULL) {
+        return STASIS_INVALID_ARGUMENT;
+    }
+    *instance = NULL;
+    if (script == NULL) {
+        return STASIS_INVALID_ARGUMENT;
+    }
+    return stasis_instance_new(script, user_data, instance);
 }
 
 /* Starts a call into a ready instance. */

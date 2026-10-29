@@ -7,9 +7,10 @@
  * gets a handle of its own if it crosses again. So a value from 1 up to the last issued that isn't
  * live is a revoked handle, and any other, 0 included, is forged.
  *
- * The table keeps only live handles, in two hash tables, one by value and one by host object, so
- * its size follows the number of live handles, however many it has issued. Only reserving room
- * allocates, so issuing and revoking never fail for lack of memory. */
+ * The table keeps only live handles, in two hash tables, one by value and one by host object, and
+ * a list of their values in increasing order, which snapshots hold them in. So its size follows the
+ * number of live handles, however many it has issued. Only reserving room allocates, so issuing,
+ * revoking and binding never fail for lack of memory. */
 
 #ifndef STASIS_HANDLES_H
 #define STASIS_HANDLES_H
@@ -43,6 +44,8 @@ struct handle_table {
     struct handle *by_value;
     struct handle *by_object;
     size_t capacity;
+    /* The values of the `count` live handles, in increasing order, in room for `capacity`. */
+    uint32_t *ordered;
     size_t count;
 };
 
@@ -81,5 +84,18 @@ bool stasis_handle_issue(struct handle_table *table, uint32_t kind, void *object
 
 /* Revokes the live handle for `object` of the kind `kind`, if the table has one. */
 void stasis_handle_revoke(struct handle_table *table, uint32_t kind, const void *object);
+
+/* The live handle at `position` among the table's, in increasing order of value, which is less
+ * than its count. */
+struct handle stasis_handle_at(const struct handle_table *table, size_t position);
+
+/* Starts a table of a restored instance, which must be empty, as if it had issued `issued` handles
+ * and revoked them all, with room for `live` of them to be bound again with stasis_handle_bind.
+ * Returns false if there's no memory for it, which changes nothing. */
+bool stasis_handle_table_restore(struct handle_table *table, uint32_t issued, size_t live);
+
+/* Binds the handle `value`, which is at most the last the table has issued, and greater than every
+ * live handle's, to `object` of the kind `kind`, which has no handle, into room made for it. */
+void stasis_handle_bind(struct handle_table *table, uint32_t value, uint32_t kind, void *object);
 
 #endif
