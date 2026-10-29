@@ -5,6 +5,7 @@
 #include "boundary.h"
 #include "calls.h"
 #include "descriptors.h"
+#include "handles.h"
 #include "layout.h"
 #include "objects.h"
 #include "platform.h"
@@ -25,6 +26,7 @@ static _Thread_local stasis_instance *running;
 
 /* Frees an instance's own memory, once WAMR's part of it is destroyed. */
 static void free_instance(stasis_instance *instance) {
+    stasis_handle_table_free(&instance->handles);
     stasis_trap_record_free(&instance->trap);
     stasis_deallocate(instance->scratch);
     stasis_deallocate(instance->results);
@@ -46,6 +48,7 @@ stasis_status stasis_instance_create(stasis_script *script, void *user_data,
     if (created == NULL) {
         return STASIS_OUT_OF_MEMORY;
     }
+    stasis_handle_table_init(&created->handles);
     created->entry_points = (wasm_function_inst_t *)stasis_allocate_zeroed(
         script->entry_point_count, sizeof *created->entry_points);
     created->post_returns = (wasm_function_inst_t *)stasis_allocate_zeroed(
@@ -161,17 +164,20 @@ stasis_status stasis_instance_start(stasis_instance *instance) {
     return leave(instance, stasis_invoke(instance, instance->initialize, 0, NULL, 0, NULL));
 }
 
-/* Whether each string among the host's arguments to an entry point can cross. */
-static bool strings_cross(const struct layout *parameters, const void *arguments) {
+/* Whether each string and host object among the host's arguments to an entry point can cross: a
+ * host object can't be null. */
+static bool arguments_cross(const struct layout *parameters, const void *arguments) {
     for (size_t i = 0; i < parameters->leaf_count; i++) {
         const struct leaf *leaf = &parameters->leaves[i];
-        if (leaf->value.type != STASIS_TYPE_STRING) {
-            continue;
-        }
-        stasis_string string;
-        memcpy(&string, (const unsigned char *)arguments + leaf->value.offset, sizeof string);
-        size_t valid = 0;
-        if (stasis_check_host_string(string, &valid) != STRING_CROSSES) {
+        const unsigned char *at = (const unsigned char *)arguments + leaf->value.offset;
+        if (leaf->value.type == STASIS_TYPE_STRING) {
+            stasis_string string;
+            memcpy(&string, at, sizeof string);
+            size_t valid = 0;
+            if (stasis_check_host_string(string, &valid) != STRING_CROSSES) {
+                return false;
+            }
+        } else if (leaf->value.type == STASIS_TYPE_HANDLE && stasis_load_object(at) == NULL) {
             return false;
         }
     }
@@ -179,10 +185,11 @@ static bool strings_cross(const struct layout *parameters, const void *arguments
 }
 
 /* Lowers the host's arguments to an entry point into the core values at `core`, putting each
- * string into the running instance's memory, and sets `count` to the number of core values.
- * Arguments that flatten into more core values than an entry point can take spill into the memory,
- * as a tuple that Stasis allocates there with the script's cabi_realloc, and the core value is its
- * address. Returns false when the call is to end, as stasis_reallocate does. */
+ * string into the running instance's memory and each host object as its handle, and sets `count`
+ * to the number of core values. Arguments that flatten into more core values than an entry point
+ * can take spill into the memory, as a tuple that Stasis allocates there with the script's
+ * cabi_realloc, and the core value is its address. Returns false when the call is to end, as
+ * stasis_reallocate does, or because the instance has no handle left to give a host object. */
 static bool lower_arguments(stasis_instance *instance, const stasis_entry_point *descriptor,
                             const struct layout *parameters, const void *arguments,
                             wasm_val_t *core, uint32_t *count) {
@@ -201,13 +208,23 @@ static bool lower_arguments(stasis_instance *instance, const stasis_entry_point 
     }
     for (size_t i = 0; i < parameters->leaf_count; i++) {
         const struct leaf *leaf = &parameters->leaves[i];
+        const unsigned char *at = (const unsigned char *)arguments + leaf->value.offset;
+        const struct placed_value value = {descriptor, leaf->position, NULL, leaf->path};
+        if (leaf->value.type == STASIS_TYPE_HANDLE) {
+            uint32_t handle = 0;
+            if (!stasis_lower_handle(instance, &value, leaf->value.index, stasis_load_object(at),
+                                     &handle)) {
+                return false;
+            }
+            stasis_lower_scalar(&u32, &handle, &core[leaf->slot]);
+            continue;
+        }
         if (leaf->value.type != STASIS_TYPE_STRING) {
             stasis_lower_scalar(&leaf->value, arguments, &core[leaf->slot]);
             continue;
         }
         stasis_string string;
-        memcpy(&string, (const unsigned char *)arguments + leaf->value.offset, sizeof string);
-        const struct placed_value value = {descriptor, leaf->position, NULL, leaf->path};
+        memcpy(&string, at, sizeof string);
         uint32_t address = 0;
         if (!stasis_place_string(instance, &value, string, &address)) {
             return false;
@@ -277,11 +294,43 @@ static bool check_result_string(stasis_instance *instance, const stasis_entry_po
     return true;
 }
 
+/* Lifts the handle `value` that is `leaf` of an entry point's result, setting `object` to the host
+ * object it names, which is null when the handle was revoked. Returns false, having raised a
+ * boundary violation, if the instance was never given it, or it names a host object of another
+ * kind. */
+static bool lift_result_handle(stasis_instance *instance, const stasis_entry_point *descriptor,
+                               const struct leaf *leaf, uint32_t value, void **object) {
+    uint32_t other_kind = 0;
+    const enum handle_fault fault =
+        stasis_handle_lift(&instance->handles, value, leaf->value.index, object, &other_kind);
+    if (fault == HANDLE_CROSSES) {
+        return true;
+    }
+    const stasis_interface *interface_data = instance->script->interface_data;
+    const char *script_kind = interface_data->scripts[0].name;
+    if (fault == HANDLE_FORGED) {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the entry point `%s.%s` returned " FIELD_FORMAT
+                                "handle %lu, which the instance was never given",
+                                script_kind, descriptor->name, RESULT_FIELD_ARGUMENTS(leaf->path),
+                                (unsigned long)value);
+    } else {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the entry point `%s.%s` returned " FIELD_FORMAT
+                                "handle %lu, which names a host object of another kind, `%s`",
+                                script_kind, descriptor->name, RESULT_FIELD_ARGUMENTS(leaf->path),
+                                (unsigned long)value,
+                                interface_data->kinds[other_kind].qualified_name);
+    }
+    return false;
+}
+
 /* Lifts the result that an entry point returned in the return area at `area` in the script's
  * memory into `result`, copying the bytes of each string it holds into the instance's buffer for
  * results. Returns RESULT_NOT_LIFTED, having raised a boundary violation, if the area isn't all in
- * memory or is misaligned, or a string isn't all in memory or isn't UTF-8, and
- * RESULT_LIFTED_BUT_NO_MEMORY, leaving the result alone, if there's no memory for the buffer. */
+ * memory or is misaligned, a string isn't all in memory or isn't UTF-8, or a handle can't cross,
+ * and RESULT_LIFTED_BUT_NO_MEMORY, leaving the result alone, if there's no memory for the
+ * buffer. */
 static enum lifted lift_from_area(stasis_instance *instance, const stasis_entry_point *descriptor,
                                   const struct layout *results, uint32_t area, void *result) {
     const char *kind = instance->script->interface_data->scripts[0].name;
@@ -304,17 +353,24 @@ static enum lifted lift_from_area(stasis_instance *instance, const stasis_entry_
         return RESULT_NOT_LIFTED;
     }
 
-    /* Every string is checked first, and the buffer made room for all of them, unless together
-     * they're more bytes than a size can count. */
+    /* Every string and handle is checked first, and the buffer made room for all the strings,
+     * unless together they're more bytes than a size can count. */
     const unsigned char *tuple = memory.base + area;
     size_t total = 0;
     bool countable = true;
     for (size_t i = 0; i < results->leaf_count; i++) {
         const struct leaf *leaf = &results->leaves[i];
+        const unsigned char *at = tuple + leaf->memory_offset;
+        if (leaf->value.type == STASIS_TYPE_HANDLE) {
+            void *object = NULL;
+            if (!lift_result_handle(instance, descriptor, leaf, stasis_load_u32(at), &object)) {
+                return RESULT_NOT_LIFTED;
+            }
+            continue;
+        }
         if (leaf->value.type != STASIS_TYPE_STRING) {
             continue;
         }
-        const unsigned char *at = tuple + leaf->memory_offset;
         const uint32_t size = stasis_load_u32(at + 4);
         if (!check_result_string(instance, descriptor, leaf, memory, stasis_load_u32(at), size)) {
             return RESULT_NOT_LIFTED;
@@ -333,6 +389,13 @@ static enum lifted lift_from_area(stasis_instance *instance, const stasis_entry_
     for (size_t i = 0; i < results->leaf_count; i++) {
         const struct leaf *leaf = &results->leaves[i];
         const unsigned char *at = tuple + leaf->memory_offset;
+        if (leaf->value.type == STASIS_TYPE_HANDLE) {
+            /* It crosses, as the check above found. */
+            void *object = NULL;
+            (void)lift_result_handle(instance, descriptor, leaf, stasis_load_u32(at), &object);
+            stasis_store_object((unsigned char *)result + leaf->value.offset, object);
+            continue;
+        }
         if (leaf->value.type != STASIS_TYPE_STRING) {
             stasis_load_scalar(&leaf->value, at, result);
             continue;
@@ -355,7 +418,18 @@ static enum lifted lift_from_area(stasis_instance *instance, const stasis_entry_
 static enum lifted lift_result(stasis_instance *instance, const stasis_entry_point *descriptor,
                                const struct layout *results, const wasm_val_t *core, void *result) {
     if (results->flat_count <= STASIS_MAX_FLAT_RESULTS) {
-        stasis_lift_scalar(&results->leaves[0].value, core, result);
+        const struct leaf *leaf = &results->leaves[0];
+        if (leaf->value.type != STASIS_TYPE_HANDLE) {
+            stasis_lift_scalar(&leaf->value, core, result);
+            return RESULT_LIFTED;
+        }
+        uint32_t value = 0;
+        memcpy(&value, &core->of.i32, sizeof value);
+        void *object = NULL;
+        if (!lift_result_handle(instance, descriptor, leaf, value, &object)) {
+            return RESULT_NOT_LIFTED;
+        }
+        stasis_store_object((unsigned char *)result + leaf->value.offset, object);
         return RESULT_LIFTED;
     }
     uint32_t area = 0;
@@ -378,7 +452,7 @@ static stasis_status call(stasis_instance *instance, const stasis_interface *int
         return STASIS_INVALID_ARGUMENT;
     }
     const struct function_layout *layout = &instance->script->entry_point_layouts[id];
-    if (!stasis_function_crosses(layout) || !strings_cross(&layout->parameters, arguments)) {
+    if (!arguments_cross(&layout->parameters, arguments)) {
         return STASIS_INVALID_ARGUMENT;
     }
 
@@ -398,6 +472,11 @@ static stasis_status call(stasis_instance *instance, const stasis_interface *int
     wasm_function_inst_t function = instance->entry_points[id];
     if (function == NULL) {
         return STASIS_REFUSED_ABSENT;
+    }
+    /* Room for a handle for each host object among the arguments, so that lowering them can't fail
+     * for lack of memory once the call has started. */
+    if (!stasis_handle_table_reserve(&instance->handles, layout->parameters.handle_count)) {
+        return STASIS_OUT_OF_MEMORY;
     }
 
     enter(instance);
@@ -474,6 +553,18 @@ stasis_status stasis_abort(stasis_instance *instance, const char *message) {
     }
     if (!stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HOST_ABORT, "%s", message)) {
         return STASIS_OUT_OF_MEMORY;
+    }
+    return STASIS_OK;
+}
+
+stasis_status stasis_instance_revoke(stasis_instance *instance, uint32_t kind,
+                                     const void *host_object) {
+    if (instance == NULL || kind >= instance->script->interface_data->kind_count) {
+        return STASIS_INVALID_ARGUMENT;
+    }
+    /* Null is never a host object, so no handle names it. */
+    if (host_object != NULL) {
+        stasis_handle_revoke(&instance->handles, kind, host_object);
     }
     return STASIS_OK;
 }

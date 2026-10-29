@@ -13,9 +13,9 @@
  * destroyed.
  *
  * The trampoline lifts the script's arguments into the host function's argument struct, calls its
- * thunk, and lowers the result, as the host function's layout lays them out. So far handles don't
- * cross, so a host function that takes or returns one, in a record or not, isn't registered, and a
- * script that calls one traps. */
+ * thunk, and lowers the result, as the host function's layout lays them out. A handle is lifted
+ * into the host object it names in the calling instance, and a host object is lowered into the
+ * instance's handle for it. */
 
 #ifndef STASIS_HOST_FUNCTIONS_H
 #define STASIS_HOST_FUNCTIONS_H

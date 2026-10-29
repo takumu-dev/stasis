@@ -1,6 +1,8 @@
 # Stasis's tests, each case a CTest test of its own:
 #
 #   generator.*       stasis-gen, through its command line
+#   handle_limit.*    instances running out of handles, through the C API of the test-only library
+#   handles.*         handles crossing between hosts and scripts, through the C API
 #   harness.*         the harness's own checks
 #   headers.*         what the public headers include
 #   host_functions.*  scripts calling host functions, through the C API

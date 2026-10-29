@@ -250,13 +250,13 @@ TEST(calls_a_host_function_of_each_group) {
     stop(running);
 }
 
-/* So far handles don't cross, so a host function that takes one, such as a method, can be imported
- * but not called, and calling it traps. */
-TEST(a_host_function_that_takes_a_handle_cant_be_called_yet) {
+/* A method takes the handle of the host object it's called on, and 0 is never a handle, so a script
+ * that calls one on 0 traps as a boundary violation before the method runs. */
+TEST(a_method_called_on_handle_0_traps) {
     const struct running running = start_hosts();
     ASSERT_INT_EQ(test_hosts_caller_poke(running.instance), STASIS_TRAP);
     const stasis_trap *trap = stasis_instance_trap(running.instance);
-    ASSERT_INT_EQ(trap->kind, STASIS_TRAP_KIND_OTHER);
+    ASSERT_INT_EQ(trap->kind, STASIS_TRAP_KIND_BOUNDARY_VIOLATION);
     stop(running);
 }
 
@@ -516,8 +516,8 @@ static void expect_refused(const char *name, stasis_status status, const char *e
     ASSERT_INT_EQ(stasis_library_destroy(library), STASIS_OK);
 }
 
-/* hosts.wasm imports a method and a host function of another group, which load as the others do,
- * though only the host function can be called yet. */
+/* hosts.wasm imports a method and a host function of another group, which load as the others
+ * do. */
 TEST(loads_a_script_that_imports_host_functions) {
     stasis_library *library = create_library();
     stasis_script *script = load_script(library, &test_hosts_interface, "hosts");
@@ -885,7 +885,7 @@ TEST(a_host_function_is_sure_of_its_stack) {
 }
 
 TEST_LIST(TEST_CASE(a_script_calls_a_host_function), TEST_CASE(calls_a_host_function_of_each_group),
-          TEST_CASE(a_host_function_that_takes_a_handle_cant_be_called_yet),
+          TEST_CASE(a_method_called_on_handle_0_traps),
           TEST_CASE(passes_unsigned_integers_both_ways),
           TEST_CASE(passes_signed_integers_both_ways),
           TEST_CASE(passes_floats_bit_for_bit_both_ways), TEST_CASE(passes_bools_both_ways),

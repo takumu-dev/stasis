@@ -30,7 +30,7 @@ group host {
         i: u16, j: s8, k: s32, l: u64, m: f32, n: f64, o: bool, p: u8, q: s64
     ) -> u64;
 
-    /// A kind of host object, whose method takes a handle, which can't cross yet.
+    /// A kind of host object, whose method takes the handle of the host object it's called on.
     object thing {
         fn poke();
     }

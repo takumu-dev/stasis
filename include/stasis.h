@@ -70,7 +70,7 @@ typedef enum stasis_status {
     STASIS_REFUSED_RUNNING = 3,
     /**
      * Refused, because the script instance has trapped. A trapped instance can only have its trap
-     * report read, or be destroyed.
+     * report read and its handles revoked, or be destroyed.
      */
     STASIS_REFUSED_TRAPPED = 4,
     /**
@@ -306,8 +306,7 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * interface declares must have the same signature in both, and the script must provide every
  * required one. It may provide entry points that the interface lacks, which Stasis ignores, as it
  * ignores every export it doesn't recognise. Every host function it imports must be the
- * interface's, with the same signature. So far only scalars and strings cross, so a script may
- * import a host function that takes or returns a record or a handle, but a call to it traps.
+ * interface's, with the same signature.
  *
  * Values cross by the canonical ABI, as wit-bindgen uses it on a core module. So a script that
  * Stasis puts strings into, as the results of host functions it imports or the arguments of entry
@@ -468,6 +467,9 @@ STASIS_API void *stasis_instance_user_data(const stasis_instance *instance);
  * arguments and result in their own types. Calls into scripts never nest: while one is running on
  * a thread, as it is in a host function, no instance can be called on that thread.
  *
+ * A host object among the arguments crosses as the instance's handle for it, which the instance is
+ * given if it has none, so within an instance, a host object always crosses as the same handle.
+ *
  * @param instance The script instance to call, which must be ready.
  * @param interface_data The interface the instance's script was loaded against.
  * @param entry_point The entry point's id, which is its index among the entry points of its kind
@@ -478,20 +480,21 @@ STASIS_API void *stasis_instance_user_data(const stasis_instance *instance);
  * @param result Where the entry point's result goes, laid out as its descriptor says, or null when
  * it returns nothing. It's zeroed when the call fails. The strings in a result, in records too,
  * are Stasis's copies, which stay valid until the next call into the instance, or until the
- * instance is destroyed, and the script has freed its own with its `cabi_post_`, if it has one.
+ * instance is destroyed, and the script has freed its own with its `cabi_post_`, if it has one. A
+ * host object in a result is the one its handle names, or null when the handle has been revoked.
  * @return ::STASIS_OK once the entry point has returned. ::STASIS_TRAP when it trapped, or so did
- * the script's `cabi_realloc` or `cabi_post_` as Stasis called them, and a refusal when the
- * instance couldn't take the call: ::STASIS_REFUSED_NESTED while an instance, this one or another,
- * is running on this thread, ::STASIS_REFUSED_TRAPPED, ::STASIS_REFUSED_NOT_STARTED, or
+ * the script's `cabi_realloc` or `cabi_post_` as Stasis called them, or the instance had been given
+ * every handle it can have and needed another for a host object among the arguments, and a refusal
+ * when the instance couldn't take the call: ::STASIS_REFUSED_NESTED while an instance, this one or
+ * another, is running on this thread, ::STASIS_REFUSED_TRAPPED, ::STASIS_REFUSED_NOT_STARTED, or
  * ::STASIS_REFUSED_ABSENT for an optional entry point the script doesn't provide.
  * ::STASIS_INVALID_ARGUMENT when an argument fails a check: when `instance` is null,
  * `interface_data` isn't the interface its script was loaded against, `entry_point` is out of
- * range, `arguments` or `result` is null where it's needed, or a string argument's data is null
- * though it isn't empty, or it's larger than 2^31 - 1 bytes, or isn't UTF-8. So far only scalars
- * and strings cross, and only as arguments that flatten into at most 16 core values, so a call to
- * an entry point that takes or returns a record or a handle, or takes more arguments than that, is
- * ::STASIS_INVALID_ARGUMENT too. ::STASIS_OUT_OF_MEMORY when there was no memory to copy the
- * result's strings, though the entry point has run, and the script has freed its results.
+ * range, `arguments` or `result` is null where it's needed, a string argument's data is null
+ * though it isn't empty, or it's larger than 2^31 - 1 bytes, or isn't UTF-8, or a host object among
+ * the arguments is null. ::STASIS_OUT_OF_MEMORY when there was no memory for the handles of the
+ * host objects among the arguments, before the entry point runs, or to copy the result's strings,
+ * though the entry point has run, and the script has freed its results.
  */
 STASIS_API stasis_status stasis_call(stasis_instance *instance,
                                      const stasis_interface *interface_data, uint32_t entry_point,
@@ -501,9 +504,8 @@ STASIS_API stasis_status stasis_call(stasis_instance *instance,
  * @brief What made a script instance trap, whatever the backend it ran on.
  *
  * A kind's number never changes and is never reused, but any minor release may add kinds, so a host
- * handles kinds it doesn't know. Of Stasis's own kinds, so far only ::STASIS_TRAP_KIND_HOST_ABORT,
- * ::STASIS_TRAP_KIND_BOUNDARY_VIOLATION and ::STASIS_TRAP_KIND_ALLOCATION_FAILED can happen: the
- * others come with handles and the system interface, which this release lacks.
+ * handles kinds it doesn't know. Of Stasis's own kinds, so far all but ::STASIS_TRAP_KIND_EXIT can
+ * happen: it comes with the system interface, which this release lacks.
  */
 typedef enum stasis_trap_kind {
     /**
@@ -539,7 +541,7 @@ typedef enum stasis_trap_kind {
     STASIS_TRAP_KIND_OTHER = 7,
     /**
      * A host function or hook aborted the call, or a host function returned a value that can't
-     * cross, such as a string that isn't UTF-8.
+     * cross, such as a string that isn't UTF-8, or a null host object.
      */
     STASIS_TRAP_KIND_HOST_ABORT = 8,
     /**
@@ -549,11 +551,15 @@ typedef enum stasis_trap_kind {
      */
     STASIS_TRAP_KIND_BOUNDARY_VIOLATION = 9,
     /**
-     * Stasis needed memory in the instance to hand the script a value, and the script's
-     * `cabi_realloc` returned null.
+     * Stasis needed memory to hand the script a value, and had none: the script's `cabi_realloc`
+     * returned null, or there was no memory to keep the handle of a host object that a host
+     * function returned.
      */
     STASIS_TRAP_KIND_ALLOCATION_FAILED = 10,
-    /** The instance needed a handle for a host object, and had none left. */
+    /**
+     * The instance needed a handle for a host object, and had been given every handle it can have:
+     * 4,294,967,295 over its life, since handles are never reused.
+     */
     STASIS_TRAP_KIND_HANDLES_EXHAUSTED = 11,
     /** The script exited, as a C script's `exit` does. */
     STASIS_TRAP_KIND_EXIT = 12,
@@ -615,7 +621,8 @@ typedef struct stasis_trap {
  *
  * Starting an instance or calling one of its entry points can trap, and then returns ::STASIS_TRAP.
  * A trap ends the instance for good: every later start or call is refused with
- * ::STASIS_REFUSED_TRAPPED, and it can only have its report read, or be destroyed.
+ * ::STASIS_REFUSED_TRAPPED, and it can only have its report read and its handles revoked, or be
+ * destroyed.
  *
  * @param instance The script instance.
  * @return Its trap report, which stays valid and unchanged until the instance is destroyed, or null
@@ -639,6 +646,28 @@ STASIS_API const stasis_trap *stasis_instance_trap(const stasis_instance *instan
  * nothing, and ::STASIS_INVALID_ARGUMENT when `instance` or `message` is null.
  */
 STASIS_API stasis_status stasis_abort(stasis_instance *instance, const char *message);
+
+/**
+ * @brief Revokes a script instance's handle for a host object.
+ *
+ * Once revoked, the handle names nothing in the instance. The script may still pass it to host
+ * functions, which receive it as null, but it's never reused, so a host object that crosses into
+ * the instance again gets a new handle. Revoking runs no script code, so it's allowed in every
+ * state, running included: a host function may revoke a handle in the instance that called it, and
+ * every later host function receives that handle as null. An instance runs on one thread at a time,
+ * so while it's running, only its host functions and hooks may revoke its handles.
+ *
+ * @param instance The script instance.
+ * @param kind The id of the host object's kind, among the kinds of host object of the instance's
+ * interface. The host's side of an interface names each id with a constant, such as
+ * `ACME_DUNGEON_WORLD_ENTITY_KIND`.
+ * @param host_object The host object, which Stasis never dereferences. It may be null, as a
+ * revoked handle reaches a host function, and then nothing is revoked.
+ * @return ::STASIS_OK, also when the instance has no handle for the host object, which changes
+ * nothing, or ::STASIS_INVALID_ARGUMENT when `instance` is null, or `kind` is out of range.
+ */
+STASIS_API stasis_status stasis_instance_revoke(stasis_instance *instance, uint32_t kind,
+                                                const void *host_object);
 
 #ifdef __cplusplus
 }

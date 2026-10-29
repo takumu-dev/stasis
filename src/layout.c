@@ -128,7 +128,7 @@ static void add_leaf(struct laying_out *laying, const stasis_value *value) {
         layout->memory_alignment = alignment;
     }
     if (value->type == STASIS_TYPE_HANDLE) {
-        layout->holds_handle = true;
+        layout->handle_count++;
     }
     const size_t size = path_size(laying);
     /* Writing walks as measuring did, and the room it found is checked all the same. */
@@ -191,7 +191,7 @@ static bool walk_values(struct laying_out *laying, const stasis_value *values, s
     layout->leaf_count = 0;
     layout->flat_count = 0;
     layout->memory_alignment = 1;
-    layout->holds_handle = false;
+    layout->handle_count = 0;
     laying->memory_size = 0;
     laying->paths_size = 0;
     for (size_t i = 0; i < count; i++) {
@@ -265,11 +265,4 @@ stasis_status stasis_function_layout_init(struct function_layout *layout,
 void stasis_function_layout_free(struct function_layout *layout) {
     free_layout(&layout->parameters);
     free_layout(&layout->result);
-}
-
-bool stasis_function_crosses(const struct function_layout *layout) {
-    if (layout->parameters.holds_handle || layout->result.holds_handle) {
-        return false;
-    }
-    return true;
 }

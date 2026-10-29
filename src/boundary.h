@@ -1,7 +1,7 @@
 /* How values cross between the C structs that hold them on the host's side and the core values
  * that a script's functions take and return, or the script's memory, as the canonical ABI lowers
- * and lifts them: scalars, and the strings' bytes. Records cross as the values they hold, which
- * layout.h lays out. */
+ * and lifts them: scalars, the strings' bytes, and the host objects that handles name, as the C
+ * structs hold them. Records cross as the values they hold, which layout.h lays out. */
 
 #ifndef STASIS_BOUNDARY_H
 #define STASIS_BOUNDARY_H
@@ -70,6 +70,11 @@ enum string_fault {
  * larger than a string may be, and it has to be UTF-8. When it isn't UTF-8, sets `valid` to the
  * offset of its first character that isn't. */
 enum string_fault stasis_check_host_string(stasis_string string, size_t *valid);
+
+/* Loads the host object stored at `at`, in a C struct that holds a handle on the host's side, as a
+ * pointer to its kind's opaque type, or stores one there. */
+void *stasis_load_object(const unsigned char *at);
+void stasis_store_object(unsigned char *at, void *object);
 
 /* Lifts the scalar that the canonical ABI stored in a script's memory at `at`, little-endian, into
  * the scalar at `value`'s offset in `destination`. A bool is true unless its byte is 0. */

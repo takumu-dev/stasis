@@ -127,6 +127,8 @@ set(STASIS_CORE_SOURCES
     "${PROJECT_SOURCE_DIR}/src/calls.h"
     "${PROJECT_SOURCE_DIR}/src/descriptors.c"
     "${PROJECT_SOURCE_DIR}/src/descriptors.h"
+    "${PROJECT_SOURCE_DIR}/src/handles.c"
+    "${PROJECT_SOURCE_DIR}/src/handles.h"
     "${PROJECT_SOURCE_DIR}/src/host_functions.c"
     "${PROJECT_SOURCE_DIR}/src/host_functions.h"
     "${PROJECT_SOURCE_DIR}/src/instance.c"

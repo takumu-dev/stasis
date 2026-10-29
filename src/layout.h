@@ -45,8 +45,8 @@ struct layout {
      * alignment, which is 1 when there are none. */
     size_t memory_size;
     size_t memory_alignment;
-    /* Whether a leaf is a handle. */
-    bool holds_handle;
+    /* The number of leaves that are handles. */
+    size_t handle_count;
     /* The leaves' paths, one after another. */
     char *paths;
 };
@@ -86,9 +86,6 @@ stasis_status stasis_function_layout_init(struct function_layout *layout,
 
 /* Frees a function's layout. */
 void stasis_function_layout_free(struct function_layout *layout);
-
-/* Whether a function's values can cross yet: whether none of them is a handle, or holds one. */
-bool stasis_function_crosses(const struct function_layout *layout);
 
 /* How a message names the field that a leaf is in, before what holds the record it's in, as in "the
  * field `at.x` of argument 1". FIELD_FORMAT prints it, with its arguments from FIELD_ARGUMENTS

@@ -304,6 +304,16 @@ enum string_fault stasis_check_host_string(stasis_string string, size_t *valid) 
     return *valid < string.size ? STRING_NOT_UTF8 : STRING_CROSSES;
 }
 
+void *stasis_load_object(const unsigned char *at) {
+    void *object = NULL;
+    memcpy((void *)&object, at, sizeof object);
+    return object;
+}
+
+void stasis_store_object(unsigned char *at, void *object) {
+    memcpy(at, (const void *)&object, sizeof object);
+}
+
 void stasis_load_scalar(const stasis_value *value, const unsigned char *at, void *destination) {
     /* The scalar's bytes, little-endian, as a core value of its own size. */
     const size_t size = stasis_memory_size(value);

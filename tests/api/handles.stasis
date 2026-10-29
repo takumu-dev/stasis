@@ -1,0 +1,85 @@
+/// Host functions and entry points that pass handles, which the tests of handles call. Its groups
+/// and its `hit` are the dungeon sample's, with the host functions the tests need.
+interface test:handles@1.0.0;
+
+group world {
+    record vec2 { x: f32, y: f32 }
+
+    /// Anything that lives in the world.
+    object entity {
+        /// Records the host object it's called on.
+        fn poke();
+    }
+
+    /// Something an entity carries, a kind of host object apart from entities.
+    object item {
+        /// Records the host object it's called on, and returns 0.
+        fn weight() -> u32;
+    }
+
+    /// Each returns the host object at `index` of the test's own, unless the test has set it to
+    /// return null.
+    fn find(index: u32) -> entity;
+    fn pick_up(index: u32) -> item;
+    /// Each records the host objects it's given.
+    fn touch(target: entity);
+    fn meet(a: entity, b: entity);
+    /// Records the host object it's given, and revokes its handle in the calling instance.
+    fn kill(target: entity);
+}
+
+group combat {
+    use world::{entity, vec2};
+
+    record hit { by: entity, weapon: string, damage: u32, at: vec2 }
+
+    /// Records `of`, and returns the hit the test has set.
+    fn last_hit(of: entity) -> hit;
+    /// Records the hit, and returns its damage.
+    fn alarm(about: hit) -> u32;
+    /// Records the hits, which flatten into eighteen core values, so that they spill into the
+    /// script's memory.
+    fn take_hits(a: hit, b: hit, c: hit);
+}
+
+script npc {
+    uses world, combat;
+
+    /// Each calls the host function of its name, and returns the handle it returns, as a number.
+    optional fn find(index: u32) -> u32;
+    optional fn pick_up(index: u32) -> u32;
+    /// Each calls the host function of its name with the handles given, as numbers, as they are.
+    optional fn touch(target: u32);
+    optional fn meet(a: u32, b: u32);
+    /// Calls `world.kill` with the handle `target`, and then `world.touch` with it.
+    optional fn kill(target: u32);
+    /// Calls `world.entity.poke` on the handle `target`, as it is.
+    optional fn poke(target: u32);
+    /// Calls `world.item.weight` on the handle `target`, as it is, and returns what it returns.
+    optional fn weigh(target: u32) -> u32;
+
+    /// Returns the handle of `who`, as a number.
+    optional fn greet(who: entity) -> u32;
+    /// Returns `value` as a handle, as it is.
+    optional fn choose(value: u32) -> entity;
+
+    /// Returns its argument.
+    optional fn echo_hit(blow: hit) -> hit;
+    /// Passes its argument to `combat.alarm`, and returns what it returns.
+    optional fn relay_hit(blow: hit) -> u32;
+    /// Calls `combat.alarm` with a hit by the handle `by`, as it is, and returns what it returns.
+    optional fn alarm_by(by: u32) -> u32;
+    /// Returns what `combat.last_hit` returns for the handle `of`, as it is, in the return area at
+    /// 320.
+    optional fn fetch_hit(of: u32) -> hit;
+    /// Passes its arguments to `combat.take_hits`, as Stasis spilled them into the script's
+    /// memory.
+    optional fn pass_hits(a: hit, b: hit, c: hit);
+    /// Returns `area` as its return area, as it is, for the test to have laid it out.
+    optional fn return_hit_at(area: u32) -> hit;
+
+    /// Returns the 4 bytes at `address` in the script's memory, little-endian.
+    optional fn load(address: u32) -> u32;
+    /// Stores `value` at `address` in the script's memory, as 4 bytes, little-endian.
+    optional fn store(address: u32, value: u32);
+}
