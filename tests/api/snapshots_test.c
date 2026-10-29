@@ -326,7 +326,7 @@ static uint32_t pick_up(stasis_instance *instance, uint32_t index) {
 
 /* The host object that `touch` gives the host for `handle` in `instance`. */
 static const void *touch(stasis_instance *instance, uint32_t handle) {
-    static const int untouched;
+    static const int untouched = 0;
     touched = &untouched;
     ASSERT_INT_EQ(test_snapshots_keeper_touch(instance, handle), STASIS_OK);
     return touched;
