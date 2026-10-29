@@ -985,15 +985,79 @@ static void free_script(stasis_script *script) {
     stasis_deallocate(script->entry_point_layouts);
     stasis_host_functions_free(&script->host_functions);
     stasis_deallocate(script->unsnapshottable);
+    if (script->global_names != NULL) {
+        for (size_t i = 0; i < script->snapshot_rules.global_count; i++) {
+            stasis_deallocate(script->global_names[i]);
+        }
+    }
+    stasis_deallocate((void *)script->global_names);
+    stasis_deallocate(script->globals);
     stasis_module_code_free(&script->code);
     stasis_deallocate(script->bytes);
     stasis_deallocate(script);
 }
 
+/* The name of the first export of the global at `index`, or an empty name if there's none. */
+static stasis_string global_export_name(const struct module *module, uint32_t index) {
+    for (uint32_t i = 0; i < module->export_count; i++) {
+        const struct module_export *export = &module->exports[i];
+        if (export->kind == MODULE_GLOBAL && export->index == index) {
+            return export->name;
+        }
+    }
+    const stasis_string none = {NULL, 0};
+    return none;
+}
+
+/* Fills in what a snapshottable script's snapshots must agree with: the limits of its one memory,
+ * which may grow no larger than an instance's may, and each mutable global it defines, which it
+ * exports, with the name it's exported as. Returns false if there's no memory for it. */
+static bool keep_snapshot_rules(stasis_script *script, const struct load *load) {
+    const struct module *module = &load->module;
+    size_t count = 0;
+    for (uint32_t i = 0; i < module->global_count; i++) {
+        if (module->globals[i].is_mutable) {
+            count++;
+        }
+    }
+    script->globals = stasis_allocate_zeroed(count, sizeof *script->globals);
+    script->global_names = (char **)stasis_allocate_zeroed(count, sizeof *script->global_names);
+    if (script->globals == NULL || script->global_names == NULL) {
+        return false;
+    }
+    script->snapshot_rules.global_count = count;
+    size_t kept = 0;
+    for (uint32_t i = 0; i < module->global_count; i++) {
+        if (!module->globals[i].is_mutable) {
+            continue;
+        }
+        const uint32_t index = module->global_import_count + i;
+        script->globals[kept].index = index;
+        script->globals[kept].type = module->globals[i].type;
+        script->global_names[kept] = copy_name(global_export_name(module, index));
+        if (script->global_names[kept] == NULL) {
+            return false;
+        }
+        kept++;
+    }
+
+    const struct module_memory *memory = &module->memories[0];
+    uint32_t maximum = STASIS_MAX_MEMORY_PAGES;
+    if (memory->has_maximum && memory->maximum < maximum) {
+        maximum = memory->maximum;
+    }
+    script->snapshot_rules.identity = script->identity;
+    script->snapshot_rules.minimum_pages = memory->minimum;
+    script->snapshot_rules.maximum_pages = maximum;
+    script->snapshot_rules.globals = script->globals;
+    script->snapshot_rules.interface_data = load->interface_data;
+    return true;
+}
+
 /* Fills in what a script that has passed the load check keeps of the check: its identity, the
  * export name of each entry point it provides, and of its cabi_post_*, why it isn't snapshottable,
- * and where its code is, which the reader maps only if WAMR's trap reports need it. Returns false
- * if there's no memory for it. */
+ * or else what its snapshots must agree with, and where its code is, which the reader maps only if
+ * WAMR's trap reports need it. Returns false if there's no memory for it. */
 static bool keep_check(stasis_script *script, struct load *load) {
     memcpy(script->identity, load->module.identity, sizeof script->identity);
     script->entry_point_count = load->kind->entry_point_count;
@@ -1038,6 +1102,8 @@ static bool keep_check(stasis_script *script, struct load *load) {
         }
         stasis_message_init(&reason, script->unsnapshottable, size);
         stasis_explain_unsnapshottable(&load->module, &reason);
+    } else if (!keep_snapshot_rules(script, load)) {
+        return false;
     }
     script->code = load->module.code;
     memset(&load->module.code, 0, sizeof load->module.code);

@@ -10,8 +10,10 @@
 #include "test_handles.h"
 #include "testing.h"
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* The handle that `find` gives the instance for the entity at `index`. */
 static uint32_t find(stasis_instance *instance, uint32_t index) {
@@ -81,4 +83,54 @@ TEST(running_out_of_handles_traps) {
     forget_seen();
 }
 
-TEST_LIST(TEST_CASE(running_out_of_handles_traps));
+/* A snapshot records the next handle value, which for an instance that has been given every handle
+ * it can have is one past the last, so the restored instance has none left to give either, though
+ * it keeps the handles that are live. A snapshot whose next value is past that is malformed. */
+TEST(a_restored_instance_has_no_more_handles_than_its_snapshot) {
+    const uint32_t limit = stasis_testing_handle_limit();
+    forget_seen();
+    stasis_library *library = create_library();
+    stasis_script *script = load_script(library, &test_handles_interface, "handles");
+    stasis_instance *instance = start_instance(script);
+    for (uint32_t i = 0; i < limit; i++) {
+        ASSERT_UINT_EQ(find(instance, i), i + 1);
+    }
+    size_t size = 0;
+    ASSERT_INT_EQ(stasis_instance_snapshot_size(instance, &size), STASIS_OK);
+    unsigned char *snapshot = malloc(size);
+    ASSERT_TRUE(snapshot != NULL);
+    ASSERT_INT_EQ(stasis_instance_snapshot(instance, snapshot, size, &size), STASIS_OK);
+    stasis_handle handles[HOST_OBJECT_COUNT];
+    size_t count = 0;
+    ASSERT_INT_EQ(stasis_instance_handles(instance, handles, HOST_OBJECT_COUNT, &count), STASIS_OK);
+    ASSERT_SIZE_EQ(count, limit);
+
+    stasis_instance *restored = NULL;
+    ASSERT_INT_EQ(
+        stasis_instance_restore(script, snapshot, size, handles, count, NULL, NULL, 0, &restored),
+        STASIS_OK);
+    ASSERT_UINT_EQ(find(restored, limit - 1), limit);
+    uint32_t handle = 99;
+    ASSERT_INT_EQ(test_handles_npc_find(restored, limit, &handle), STASIS_TRAP);
+    expect_exhausted(restored, "the result of `world.find`");
+
+    /* The handle table follows the memory's length and the globals, of which the script has none:
+     * the magic number, the version, the identity and the two counts take 56 bytes. The next
+     * handle value is a u64, little-endian. */
+    snapshot[56] = (unsigned char)(limit + 2);
+    char message[256];
+    ASSERT_INT_EQ(stasis_instance_restore(script, snapshot, size, handles, count, NULL, message,
+                                          sizeof message, &restored),
+                  STASIS_INVALID_SNAPSHOT);
+    char expected[256];
+    (void)snprintf(expected, sizeof expected,
+                   "the snapshot's next handle value is %lu, where it can be from 1 to %lu",
+                   (unsigned long)limit + 2, (unsigned long)limit + 1);
+    ASSERT_STR_EQ(message, expected);
+    free(snapshot);
+    destroy_all(instance, script, library);
+    forget_seen();
+}
+
+TEST_LIST(TEST_CASE(running_out_of_handles_traps),
+          TEST_CASE(a_restored_instance_has_no_more_handles_than_its_snapshot));

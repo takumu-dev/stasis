@@ -70,7 +70,7 @@ typedef enum stasis_status {
     STASIS_REFUSED_RUNNING = 3,
     /**
      * Refused, because the script instance has trapped. A trapped instance can only have its trap
-     * report read and its handles revoked, or be destroyed.
+     * report read and its handles listed and revoked, or be destroyed.
      */
     STASIS_REFUSED_TRAPPED = 4,
     /**
@@ -125,8 +125,9 @@ typedef enum stasis_status {
     /** Restoring failed, because the snapshot is malformed. */
     STASIS_INVALID_SNAPSHOT = 18,
     /**
-     * Restoring failed, because the host objects given for the snapshot's live handles leave one
-     * out, give one twice, or give one an object of another kind.
+     * Restoring failed, because the handles given to bind the snapshot's live handles leave one
+     * out, give one twice, give one a host object of another kind, give a handle that wasn't live,
+     * or bind two handles to the same host object.
      */
     STASIS_INVALID_BINDINGS = 19,
     /** The allocator returned null. */
@@ -672,9 +673,9 @@ typedef struct stasis_trap {
  * @brief The trap report of a script instance that has trapped.
  *
  * Starting an instance or calling one of its entry points can trap, and then returns ::STASIS_TRAP.
- * A trap ends the instance for good: every later start or call is refused with
- * ::STASIS_REFUSED_TRAPPED, and it can only have its report read and its handles revoked, or be
- * destroyed.
+ * A trap ends the instance for good: every later start, call or snapshot is refused with
+ * ::STASIS_REFUSED_TRAPPED, and it can only have its report read and its handles listed and
+ * revoked, or be destroyed.
  *
  * @param instance The script instance.
  * @return Its trap report, which stays valid and unchanged until the instance is destroyed, or null
@@ -721,6 +722,156 @@ STASIS_API stasis_status stasis_abort(stasis_instance *instance, const char *mes
  */
 STASIS_API stasis_status stasis_instance_revoke(stasis_instance *instance, uint32_t kind,
                                                 const void *host_object);
+
+/**
+ * @brief One of a script instance's live handles: its value, and the host object it names, with
+ * the object's kind.
+ *
+ * Beside a snapshot, the host lists the instance's live handles, and records which of its own
+ * objects each names. When it restores the snapshot, it gives back one for each, with the host
+ * object now behind it, which binds the handle to that object in the restored instance.
+ */
+typedef struct stasis_handle {
+    /** The handle's value, as the script sees it, which is never 0. */
+    uint32_t value;
+    /**
+     * The id of the host object's kind, among the kinds of host object of the instance's
+     * interface.
+     */
+    uint32_t kind;
+    /**
+     * The host object, which Stasis never dereferences. It's never null in a list of an instance's
+     * handles. In a restore, null revokes the handle.
+     */
+    void *host_object;
+} stasis_handle;
+
+/**
+ * @brief The size of a snapshot of a script instance, as it is now.
+ *
+ * A snapshot holds everything the instance's script can change: its linear memory, its mutable
+ * globals and its handles, without the host objects they name. It's taken between calls, so it
+ * holds nothing of a call's, and restoring it into a new instance with stasis_instance_restore()
+ * carries on as the instance would have. Nothing about where it was taken goes in, so the same
+ * state gives the same bytes in every build of Stasis, on every platform and interpreter.
+ *
+ * @param instance The script instance, which must be ready, and of a snapshottable script.
+ * @param size Where the size in bytes goes, which is 0 when this fails.
+ * @return ::STASIS_OK, or a refusal when the instance can't be snapshotted:
+ * ::STASIS_REFUSED_NOT_SNAPSHOTTABLE when its script isn't snapshottable, as
+ * stasis_script_snapshottable() says, ::STASIS_REFUSED_RUNNING while it's running, as it is in a
+ * host function, ::STASIS_REFUSED_TRAPPED, or ::STASIS_REFUSED_NOT_STARTED when it was created but
+ * hasn't started. ::STASIS_INVALID_ARGUMENT when `instance` or `size` is null.
+ */
+STASIS_API stasis_status stasis_instance_snapshot_size(const stasis_instance *instance,
+                                                       size_t *size);
+
+/**
+ * @brief Writes a snapshot of a script instance, as it is now, into the host's buffer.
+ *
+ * The host asks stasis_instance_snapshot_size() for the size first, and may reuse one buffer for
+ * every snapshot that fits. Beside the snapshot, it lists the instance's live handles with
+ * stasis_instance_handles(), since the snapshot holds the handles but not the host objects they
+ * name.
+ *
+ * @param instance The script instance, which must be ready, and of a snapshottable script.
+ * @param buffer Where the snapshot goes. It may be null when `buffer_size` is 0.
+ * @param buffer_size The size of the buffer, which must be at least the snapshot's.
+ * @param size Where the size in bytes of the snapshot goes, which is 0 when this fails.
+ * @return ::STASIS_OK, ::STASIS_BUFFER_TOO_SMALL when the buffer is smaller than the snapshot,
+ * which writes nothing, or any refusal of stasis_instance_snapshot_size().
+ * ::STASIS_INVALID_ARGUMENT when `instance` or `size` is null, or `buffer` is null though
+ * `buffer_size` isn't 0.
+ */
+STASIS_API stasis_status stasis_instance_snapshot(const stasis_instance *instance, void *buffer,
+                                                  size_t buffer_size, size_t *size);
+
+/**
+ * @brief The number of a script instance's live handles: those it has been given and that haven't
+ * been revoked.
+ *
+ * Listing handles runs no script code, so it's allowed in every state, as revoking is.
+ *
+ * @param instance The script instance.
+ * @param count Where the number goes, which is 0 when this fails.
+ * @return ::STASIS_OK, or ::STASIS_INVALID_ARGUMENT when `instance` or `count` is null.
+ */
+STASIS_API stasis_status stasis_instance_handle_count(const stasis_instance *instance,
+                                                      size_t *count);
+
+/**
+ * @brief Lists a script instance's live handles, in increasing order of value, as its snapshots
+ * hold them.
+ *
+ * The host asks stasis_instance_handle_count() for the number first. Listing handles runs no
+ * script code, so it's allowed in every state, as revoking is.
+ *
+ * @param instance The script instance.
+ * @param handles Where the handles go. It may be null when `capacity` is 0.
+ * @param capacity The number of handles the array holds, which must be at least the number of live
+ * handles.
+ * @param count Where the number of handles listed goes, which is 0 when this fails.
+ * @return ::STASIS_OK, ::STASIS_BUFFER_TOO_SMALL when the array holds fewer handles than the
+ * instance has, which writes nothing, or ::STASIS_INVALID_ARGUMENT when `instance` or `count` is
+ * null, or `handles` is null though `capacity` isn't 0.
+ */
+STASIS_API stasis_status stasis_instance_handles(const stasis_instance *instance,
+                                                 stasis_handle *handles, size_t capacity,
+                                                 size_t *count);
+
+/**
+ * @brief Restores a snapshot into a new script instance, which carries on as the instance it was
+ * taken of would have.
+ *
+ * A restored instance is ready at once. It's never started, since the snapshot already holds
+ * everything its initialisation did, so a restore runs no script code. Stasis copies what it needs
+ * of the snapshot, so the host may free it once this returns.
+ *
+ * The host binds each of the snapshot's live handles, as stasis_instance_handles() listed them,
+ * to the host object now behind it, or revokes it, all at once: `handles` holds one entry for each
+ * live handle, in any order, with its value and kind as listed, and the host object, or null to
+ * revoke it. A handle that wasn't live in the snapshot stays revoked, and values are never
+ * reused, so a host object that crosses into the restored instance for the first time gets a
+ * handle the instance has never had.
+ *
+ * A snapshot is untrusted input, as a script is: Stasis checks it whole before it creates the
+ * instance, and nothing in it can end or corrupt the host. Its memory can only put the script
+ * into a strange state, inside its sandbox.
+ *
+ * @param script The script, which must be snapshottable, and the one the snapshot was taken of, or
+ * the same script loaded again, stripped of its custom sections or not.
+ * @param snapshot The snapshot's bytes, as stasis_instance_snapshot() wrote them. It may be null
+ * when `size` is 0.
+ * @param size The number of bytes.
+ * @param handles The live handles' host objects. It may be null when `handle_count` is 0.
+ * @param handle_count The number of entries in `handles`.
+ * @param user_data A pointer of the host's, as for stasis_instance_create().
+ * @param message Where a message goes, or null for none. Stasis writes a NUL-terminated message in
+ * English, which names the check that failed, or the handle by its value and kind, when the
+ * snapshot or the handles are refused, and is empty otherwise. A message that doesn't fit is cut
+ * short. Its wording may change in any release.
+ * @param message_size The size of the buffer `message` points at, which may be 0.
+ * @param instance Where the instance goes, or null when restoring fails, which creates nothing.
+ * @return ::STASIS_OK, or one of:
+ * - ::STASIS_WRONG_SCRIPT: the snapshot is of another script;
+ * - ::STASIS_SNAPSHOT_TOO_NEW: its format is newer than this release knows;
+ * - ::STASIS_INVALID_SNAPSHOT: it's malformed, such as with another magic number, a memory that
+ *   isn't a whole number of pages or lies outside the limits of the script's memory, mutable
+ *   globals that aren't the script's, or a handle outside the range of the values it records as
+ *   issued, or of a kind the interface lacks;
+ * - ::STASIS_INVALID_BINDINGS: `handles` leaves out one of the snapshot's live handles, gives one
+ *   twice, gives one a host object of another kind, gives a handle that wasn't live, or gives two
+ *   handles the same host object;
+ * - ::STASIS_REFUSED_NOT_SNAPSHOTTABLE: the script isn't snapshottable;
+ * - ::STASIS_OUT_OF_MEMORY;
+ * - ::STASIS_INVALID_ARGUMENT: a pointer that's needed is null, or a buffer's size doesn't match
+ *   its pointer.
+ */
+STASIS_API stasis_status stasis_instance_restore(stasis_script *script, const void *snapshot,
+                                                 size_t size, const stasis_handle *handles,
+                                                 size_t handle_count, void *user_data,
+                                                 char *message, size_t message_size,
+                                                 stasis_instance **instance);
 
 #ifdef __cplusplus
 }

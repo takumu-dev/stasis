@@ -109,6 +109,7 @@ void stasis_handle_table_init(struct handle_table *table) { memset(table, 0, siz
 void stasis_handle_table_free(struct handle_table *table) {
     stasis_deallocate(table->by_value);
     stasis_deallocate(table->by_object);
+    stasis_deallocate(table->ordered);
     memset(table, 0, sizeof *table);
 }
 
@@ -126,9 +127,11 @@ bool stasis_handle_table_reserve(struct handle_table *table, size_t extra) {
     }
     struct handle *by_value = stasis_allocate_zeroed(capacity, sizeof *by_value);
     struct handle *by_object = stasis_allocate_zeroed(capacity, sizeof *by_object);
-    if (by_value == NULL || by_object == NULL) {
+    uint32_t *ordered = stasis_allocate(capacity * sizeof *ordered);
+    if (by_value == NULL || by_object == NULL || ordered == NULL) {
         stasis_deallocate(by_value);
         stasis_deallocate(by_object);
+        stasis_deallocate(ordered);
         return false;
     }
     for (size_t i = 0; i < table->capacity; i++) {
@@ -137,10 +140,15 @@ bool stasis_handle_table_reserve(struct handle_table *table, size_t extra) {
             put(by_object, capacity - 1, &table->by_value[i], true);
         }
     }
+    if (table->count > 0) {
+        memcpy(ordered, table->ordered, table->count * sizeof *ordered);
+    }
     stasis_deallocate(table->by_value);
     stasis_deallocate(table->by_object);
+    stasis_deallocate(table->ordered);
     table->by_value = by_value;
     table->by_object = by_object;
+    table->ordered = ordered;
     table->capacity = capacity;
     return true;
 }
@@ -169,16 +177,23 @@ uint32_t stasis_handle_of(const struct handle_table *table, uint32_t kind, const
     return slot != SIZE_MAX ? table->by_object[slot].value : 0;
 }
 
+/* Adds the live handle `value` for `object` of the kind `kind`, whose value is greater than every
+ * other live handle's, into room reserved for it. */
+static void add(struct handle_table *table, uint32_t value, uint32_t kind, void *object) {
+    const struct handle handle = {value, kind, object};
+    put(table->by_value, table->capacity - 1, &handle, false);
+    put(table->by_object, table->capacity - 1, &handle, true);
+    table->ordered[table->count] = value;
+    table->count++;
+}
+
 bool stasis_handle_issue(struct handle_table *table, uint32_t kind, void *object, uint32_t *value) {
     if (table->issued == STASIS_HANDLE_LIMIT || !fits(table->count + 1, table->capacity)) {
         return false;
     }
     table->issued++;
-    const struct handle handle = {table->issued, kind, object};
-    put(table->by_value, table->capacity - 1, &handle, false);
-    put(table->by_object, table->capacity - 1, &handle, true);
-    table->count++;
-    *value = handle.value;
+    add(table, table->issued, kind, object);
+    *value = table->issued;
     return true;
 }
 
@@ -187,10 +202,41 @@ void stasis_handle_revoke(struct handle_table *table, uint32_t kind, const void 
     if (slot == SIZE_MAX) {
         return;
     }
+    const uint32_t value = table->by_object[slot].value;
     const size_t mask = table->capacity - 1;
-    take_out(table->by_value, mask, slot_by_value(table, table->by_object[slot].value), false);
+    take_out(table->by_value, mask, slot_by_value(table, value), false);
     take_out(table->by_object, mask, slot, true);
+
+    /* The value is in the ordered list, which a binary search finds it in. */
+    size_t low = 0;
+    size_t high = table->count;
+    while (table->ordered[low] != value) {
+        const size_t middle = low + ((high - low) / 2);
+        if (table->ordered[middle] <= value) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    memmove(&table->ordered[low], &table->ordered[low + 1],
+            (table->count - low - 1) * sizeof *table->ordered);
     table->count--;
+}
+
+struct handle stasis_handle_at(const struct handle_table *table, size_t position) {
+    return table->by_value[slot_by_value(table, table->ordered[position])];
+}
+
+bool stasis_handle_table_restore(struct handle_table *table, uint32_t issued, size_t live) {
+    if (!stasis_handle_table_reserve(table, live)) {
+        return false;
+    }
+    table->issued = issued;
+    return true;
+}
+
+void stasis_handle_bind(struct handle_table *table, uint32_t value, uint32_t kind, void *object) {
+    add(table, value, kind, object);
 }
 
 #ifdef STASIS_TESTING
