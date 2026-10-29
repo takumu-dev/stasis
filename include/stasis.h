@@ -207,6 +207,10 @@ typedef enum stasis_stream {
 /**
  * @brief The output hook, which receives what scripts write to their standard output and error.
  *
+ * Stasis calls it for each part of each write, as the script writes it, and neither buffers the
+ * bytes nor checks them. A C script buffers its standard output by the line itself, so a line
+ * without its newline waits in the script's memory.
+ *
  * @param instance The script instance that wrote.
  * @param user_data The library's stasis_library_settings::hook_user_data.
  * @param stream The stream it wrote to.
@@ -217,27 +221,52 @@ typedef void stasis_output_hook(stasis_instance *instance, void *user_data, stas
                                 const char *bytes, size_t size);
 
 /**
+ * @brief What a script reads from a clock.
+ */
+typedef enum stasis_clock_reading {
+    /** The clock's time, as the script's `clock_time_get` reads it. */
+    STASIS_CLOCK_TIME = 0,
+    /** The clock's resolution, as the script's `clock_res_get` reads it. */
+    STASIS_CLOCK_RESOLUTION = 1,
+    /** Not a reading. It makes the type 32 bits wide, as ::STASIS_STATUS_MAX_ENUM does. */
+    STASIS_CLOCK_READING_MAX_ENUM = 0x7FFFFFFF,
+} stasis_clock_reading;
+
+/**
  * @brief The clock hook, which is scripts' only source of the time.
+ *
+ * Stasis calls it for each read of a clock, and never reads the system's clock itself, so a host
+ * decides what time each script sees: the system's, or one of its own, such as its game's ticks.
  *
  * @param instance The script instance that reads the clock.
  * @param user_data The library's stasis_library_settings::hook_user_data.
- * @param clock The WASI clock it reads: 0 for real time, 1 for monotonic time, 2 for the process's
- * CPU time, and 3 for the thread's.
- * @param precision The precision the script asks for, in nanoseconds.
- * @param time Where the hook writes the time, in nanoseconds.
- * @return Whether the hook wrote the time. When it declines, the script's read fails.
+ * @param clock The WASI clock it reads, as the script names it, which may be any value: 0 for real
+ * time, since 1970-01-01T00:00:00Z, 1 for monotonic time, 2 for the process's CPU time, and 3 for
+ * the thread's.
+ * @param reading Whether it reads the clock's time or its resolution.
+ * @param precision For the time, the precision the script asks for, in nanoseconds, and 0 for the
+ * resolution.
+ * @param nanoseconds Where the hook writes the time or the resolution, in nanoseconds.
+ * @return Whether the hook wrote it. When it declines, the script's read fails, and Stasis writes
+ * nothing into the script's memory.
  */
 typedef bool stasis_clock_hook(stasis_instance *instance, void *user_data, uint32_t clock,
-                               uint64_t precision, uint64_t *time);
+                               stasis_clock_reading reading, uint64_t precision,
+                               uint64_t *nanoseconds);
 
 /**
  * @brief The entropy hook, which is scripts' only source of randomness.
  *
+ * Stasis never reads the system's entropy itself, so a host decides what bytes each script draws:
+ * the system's, or ones it can draw again, such as from a seed it keeps.
+ *
  * @param instance The script instance that asks for random bytes.
  * @param user_data The library's stasis_library_settings::hook_user_data.
- * @param buffer Where the hook writes the random bytes.
- * @param size The number of bytes it writes.
- * @return Whether the hook filled the buffer. When it declines, the script's request fails.
+ * @param buffer Where the hook writes the random bytes, which Stasis copies into the script's
+ * memory once the hook has filled the buffer.
+ * @param size The number of bytes it writes, which may be 0.
+ * @return Whether the hook filled the buffer. When it declines, the script's request fails, and
+ * Stasis writes nothing into the script's memory.
  */
 typedef bool stasis_entropy_hook(stasis_instance *instance, void *user_data, void *buffer,
                                  size_t size);
@@ -251,8 +280,27 @@ typedef bool stasis_entropy_hook(stasis_instance *instance, void *user_data, voi
 /**
  * @brief A library's settings, which stay fixed for the library's life.
  *
- * Settings that are all zero are the defaults. A hook that's null isn't installed. Scripts can't
- * reach the hooks yet: they will through the system interface, which this release lacks.
+ * Settings that are all zero are the defaults. A hook that's null isn't installed.
+ *
+ * Scripts reach the hooks through the system interface: the 46 functions of WASI preview 1, which
+ * every script may import from `wasi_snapshot_preview1`, and which Stasis answers itself, keeping
+ * nothing of an instance's on the host's side, so whatever a script reaches through them is in its
+ * memory. A script reaches nothing outside its sandbox through them but what the hooks give it:
+ * - `fd_write` on fd 1 or 2 calls the output hook, and succeeds without one;
+ * - `clock_time_get` and `clock_res_get` call the clock hook, and `random_get` calls the entropy
+ *   hook, and each fails without its hook, or when the hook declines, writing nothing;
+ * - fds 0 to 2 are character devices that can't be sought or told, and fd 0 reads as the end of the
+ *   file;
+ * - the arguments and the environment are empty;
+ * - `proc_exit` traps as ::STASIS_TRAP_KIND_EXIT, and `sched_yield` returns at once;
+ * - every other call fails, and changes nothing: one on an fd above 2 with `badf`, a seek or a tell
+ *   on fds 0 to 2 with `spipe`, and the rest, `poll_oneoff` included, with `notsup`. There are no
+ *   files, directories or sockets.
+ *
+ * A script that passes the system interface what it reads or writes outside its memory, or
+ * misaligned, traps as ::STASIS_TRAP_KIND_BOUNDARY_VIOLATION, before any hook is called. Each hook
+ * runs inside the call into the instance it acts for, as a host function does, and may end it with
+ * stasis_abort().
  */
 typedef struct stasis_library_settings {
     /**
@@ -318,10 +366,10 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * and can fail only for lack of memory. It has no start section, and exports nothing that a
  * backend runs by itself when it creates an instance: `_initialize`, `__wasm_call_ctors` or
  * `__post_instantiate`. It imports only functions, each from one of its interface's groups or from
- * `wasi_snapshot_preview1`, the system interface. Each of its active data and element segments fits
- * the memory or the table it's copied into, as that starts, and its memory starts with at most
- * 65,535 pages. A script that isn't snapshottable still loads, with an empty message, and
- * stasis_script_snapshottable() says why it isn't.
+ * `wasi_snapshot_preview1`, the system interface, which must have the function, of the same type.
+ * Each of its active data and element segments fits the memory or the table it's copied into, as
+ * that starts, and its memory starts with at most 65,535 pages. A script that isn't snapshottable
+ * still loads, with an empty message, and stasis_script_snapshottable() says why it isn't.
  *
  * @param library The library the script goes into.
  * @param interface_data The interface, as `stasis-gen host` writes it. It must outlive the script.
@@ -342,8 +390,8 @@ STASIS_API stasis_status stasis_library_destroy(stasis_library *library);
  * - ::STASIS_INVALID_SCRIPT: it breaks Stasis's rules for scripts, such as with names that don't
  *   parse, entry points of more than one kind of script, an entry point or a host function of
  *   another type than its signature makes it, a `cabi_realloc` that's missing where it's needed, a
- *   `cabi_realloc` or `cabi_post_` of another type than the canonical ABI's, or any of the rules
- *   above;
+ *   `cabi_realloc` or `cabi_post_` of another type than the canonical ABI's, a function of the
+ *   system interface that it lacks or has with another type, or any of the rules above;
  * - ::STASIS_OUT_OF_MEMORY;
  * - ::STASIS_INVALID_ARGUMENT: a pointer that's needed is null, a buffer's size doesn't match its
  *   pointer, or the interface's descriptor format is newer than this release reads.
@@ -504,8 +552,7 @@ STASIS_API stasis_status stasis_call(stasis_instance *instance,
  * @brief What made a script instance trap, whatever the backend it ran on.
  *
  * A kind's number never changes and is never reused, but any minor release may add kinds, so a host
- * handles kinds it doesn't know. Of Stasis's own kinds, so far all but ::STASIS_TRAP_KIND_EXIT can
- * happen: it comes with the system interface, which this release lacks.
+ * handles kinds it doesn't know.
  */
 typedef enum stasis_trap_kind {
     /**
@@ -546,14 +593,15 @@ typedef enum stasis_trap_kind {
     STASIS_TRAP_KIND_HOST_ABORT = 8,
     /**
      * The script broke a rule of the boundary between it and the host, such as by passing a string
-     * that isn't UTF-8, a handle it was never given, or arguments outside its memory, or by calling
-     * an import while Stasis was inside its `cabi_realloc` or a `cabi_post_` function.
+     * that isn't UTF-8, a handle it was never given, or arguments outside its memory, to a host
+     * function or the system interface, or by calling an import while Stasis was inside its
+     * `cabi_realloc` or a `cabi_post_` function.
      */
     STASIS_TRAP_KIND_BOUNDARY_VIOLATION = 9,
     /**
      * Stasis needed memory to hand the script a value, and had none: the script's `cabi_realloc`
      * returned null, or there was no memory to keep the handle of a host object that a host
-     * function returned.
+     * function returned, or for the random bytes that the script asked the entropy hook for.
      */
     STASIS_TRAP_KIND_ALLOCATION_FAILED = 10,
     /**
@@ -561,7 +609,11 @@ typedef enum stasis_trap_kind {
      * 4,294,967,295 over its life, since handles are never reused.
      */
     STASIS_TRAP_KIND_HANDLES_EXHAUSTED = 11,
-    /** The script exited, as a C script's `exit` does. */
+    /**
+     * The script exited, as a C script's `exit` does, which has run its `atexit` handlers and
+     * flushed its streams by then. Exiting is a trap whatever the status, which is in the message,
+     * 0 included.
+     */
     STASIS_TRAP_KIND_EXIT = 12,
     /** Not a kind. It makes the type 32 bits wide, as ::STASIS_STATUS_MAX_ENUM does. */
     STASIS_TRAP_KIND_MAX_ENUM = 0x7FFFFFFF,
@@ -631,12 +683,13 @@ typedef struct stasis_trap {
 STASIS_API const stasis_trap *stasis_instance_trap(const stasis_instance *instance);
 
 /**
- * @brief Ends the call into a script instance that a host function is part of, as a trap.
+ * @brief Ends the call into a script instance that a host function or a hook is part of, as a trap.
  *
- * A host function calls it on the instance that called it, which is running on the same thread.
- * The host function then returns as it would otherwise, and Stasis ignores its result. The call
- * traps as ::STASIS_TRAP_KIND_HOST_ABORT, with the message in its trap report, so the instance has
- * trapped for good. Aborting again in the same call changes nothing: the first message stays.
+ * A host function calls it on the instance that called it, and a hook on the instance it acts for,
+ * which is running on the same thread. The host function or the hook then returns as it would
+ * otherwise, and Stasis ignores its result. The call traps as ::STASIS_TRAP_KIND_HOST_ABORT, with
+ * the message in its trap report, so the instance has trapped for good. Aborting again in the same
+ * call changes nothing: the first message stays.
  *
  * @param instance The script instance whose call to end.
  * @param message Why, as NUL-terminated UTF-8, which Stasis copies.

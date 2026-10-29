@@ -12,6 +12,7 @@
 #include "platform.h"
 #include "signature.h"
 #include "snapshottable.h"
+#include "system_interface.h"
 #include "wamr_frames.h"
 
 #include <limits.h>
@@ -26,10 +27,6 @@
 /* The prefix of the exports that free an entry point's results, which the name of the entry
  * point's export follows. */
 static const char post_return_prefix[] = "cabi_post_";
-
-/* The module that a script imports the system interface from, the only one it may import from
- * besides its interface's groups. */
-#define SYSTEM_INTERFACE_MODULE "wasi_snapshot_preview1"
 
 /* The room for WAMR's message when its loader refuses a module. */
 enum { WAMR_MESSAGE_SIZE = 256 };
@@ -478,6 +475,23 @@ static bool has_core_type(const struct module_function_type *type, const struct 
     return memcmp(type->results, core->results, core->result_count) == 0;
 }
 
+/* Writes a function's type, and the core type it should have been, as text, as in
+ * `(i32, i64) -> (f32)`, into `actual` and `expected_text`, which hold CORE_TYPE_SIZE bytes
+ * each. */
+static void format_types(char *actual, char *expected_text, const struct module_function_type *type,
+                         const struct core_type *expected) {
+    format_type(actual, CORE_TYPE_SIZE, type->parameters, type->parameter_count, type->results,
+                type->result_count);
+    format_type(expected_text, CORE_TYPE_SIZE, expected->parameters, expected->parameter_count,
+                expected->results, expected->result_count);
+}
+
+/* The type of a function that the script imports, or null if the module has no such type. */
+static const struct module_function_type *import_type(const struct load *load,
+                                                      const struct module_import *import) {
+    return import->type < load->module.type_count ? &load->module.types[import->type] : NULL;
+}
+
 /* The problems with the exports Stasis calls: an entry point or stasis_initialize that isn't a
  * function, or whose type isn't the one Stasis calls it with. Returns false if the interface's
  * descriptors are malformed. */
@@ -507,10 +521,7 @@ static bool check_exports(struct load *load) {
         if (type != NULL && !has_core_type(type, &core)) {
             char actual[CORE_TYPE_SIZE];
             char expected[CORE_TYPE_SIZE];
-            format_type(actual, sizeof actual, type->parameters, type->parameter_count,
-                        type->results, type->result_count);
-            format_type(expected, sizeof expected, core.parameters, core.parameter_count,
-                        core.results, core.result_count);
+            format_types(actual, expected, type, &core);
             problem(load, STASIS_INVALID_SCRIPT,
                     "the script's entry point `%s.%s` is a function of type %s, where its "
                     "signature makes it %s",
@@ -550,16 +561,11 @@ static bool check_imports(struct load *load) {
         if (!stasis_host_function_core_type(&load->walk, host->function, &core)) {
             return false;
         }
-        const uint32_t index = load->module.imports[i].type;
-        const struct module_function_type *type =
-            index < load->module.type_count ? &load->module.types[index] : NULL;
+        const struct module_function_type *type = import_type(load, &load->module.imports[i]);
         if (type != NULL && !has_core_type(type, &core)) {
             char actual[CORE_TYPE_SIZE];
             char expected[CORE_TYPE_SIZE];
-            format_type(actual, sizeof actual, type->parameters, type->parameter_count,
-                        type->results, type->result_count);
-            format_type(expected, sizeof expected, core.parameters, core.parameter_count,
-                        core.results, core.result_count);
+            format_types(actual, expected, type, &core);
             problem(load, STASIS_INVALID_SCRIPT,
                     "the script imports the host function " HOST_FUNCTION_FORMAT
                     " as a function of type %s, where its signature makes it %s",
@@ -614,10 +620,7 @@ static enum export_type compare_type(const struct load *load, const struct modul
     if (type == NULL || has_core_type(type, expected)) {
         return EXPORT_EXPECTED;
     }
-    format_type(actual, CORE_TYPE_SIZE, type->parameters, type->parameter_count, type->results,
-                type->result_count);
-    format_type(expected_text, CORE_TYPE_SIZE, expected->parameters, expected->parameter_count,
-                expected->results, expected->result_count);
+    format_types(actual, expected_text, type, expected);
     return EXPORT_OF_OTHER_TYPE;
 }
 
@@ -821,10 +824,35 @@ static void check_segments(struct load *load) {
     }
 }
 
+/* Notes the problem with a function that the script imports from the system interface, if the
+ * system interface lacks it, or has it with another type. */
+static void check_system_import(struct load *load, const struct module_import *import) {
+    struct core_type expected;
+    if (!stasis_system_function_type(import->field, &expected)) {
+        problem(load, STASIS_INVALID_SCRIPT,
+                "the script imports `%.*s` from `" STASIS_SYSTEM_INTERFACE_MODULE
+                "`, which the system interface lacks",
+                printed(import->field), import->field.data);
+        return;
+    }
+    const struct module_function_type *type = import_type(load, import);
+    if (type == NULL || has_core_type(type, &expected)) {
+        return;
+    }
+    char actual[CORE_TYPE_SIZE];
+    char expected_text[CORE_TYPE_SIZE];
+    format_types(actual, expected_text, type, &expected);
+    problem(load, STASIS_INVALID_SCRIPT,
+            "the script imports `%.*s` from `" STASIS_SYSTEM_INTERFACE_MODULE
+            "` as a function of type %s, where the system interface's is %s",
+            printed(import->field), import->field.data, actual, expected_text);
+}
+
 /* The problems with what the script holds, which break Stasis's rules for scripts: a start
  * section, an export a backend runs by itself, an import that isn't a function, one from a module
- * other than the interface's groups and the system interface, an active segment that doesn't fit,
- * and a memory that starts larger than an instance may have. */
+ * other than the interface's groups and the system interface, a function of the system
+ * interface's that it lacks or has with another type, an active segment that doesn't fit, and a
+ * memory that starts larger than an instance may have. */
 static void check_rules(struct load *load) {
     if (load->module.has_start) {
         problem(load, STASIS_INVALID_SCRIPT,
@@ -852,12 +880,20 @@ static void check_rules(struct load *load) {
     }
     for (uint32_t i = 0; i < load->module.import_count; i++) {
         const struct module_import *import = &load->module.imports[i];
-        if (!load->imports[i].wire && !stasis_string_is(import->module, SYSTEM_INTERFACE_MODULE)) {
+        if (!load->imports[i].wire &&
+            !stasis_string_is(import->module, STASIS_SYSTEM_INTERFACE_MODULE)) {
             problem(load, STASIS_INVALID_SCRIPT,
                     "the script imports `%.*s` from `%.*s`, which is neither a group "
-                    "of " INTERFACE_FORMAT " nor `" SYSTEM_INTERFACE_MODULE "`",
+                    "of " INTERFACE_FORMAT " nor `" STASIS_SYSTEM_INTERFACE_MODULE "`",
                     printed(import->field), import->field.data, printed(import->module),
                     import->module.data, INTERFACE_ARGUMENTS(load->interface_data));
+        }
+    }
+    for (uint32_t i = 0; i < load->module.import_count; i++) {
+        const struct module_import *import = &load->module.imports[i];
+        if (import->kind == MODULE_FUNCTION &&
+            stasis_string_is(import->module, STASIS_SYSTEM_INTERFACE_MODULE)) {
+            check_system_import(load, import);
         }
     }
     check_segments(load);

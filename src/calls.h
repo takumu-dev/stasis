@@ -40,6 +40,11 @@ struct placed_value {
 bool stasis_invoke(stasis_instance *instance, wasm_function_inst_t function, uint32_t result_count,
                    wasm_val_t *results, uint32_t argument_count, wasm_val_t *arguments);
 
+/* Ends the call that the running instance is in with the trap of Stasis's own that it has raised:
+ * WAMR unwinds the call once the host function it's in returns, and the trap report reads the
+ * raised trap. */
+void stasis_end_call(stasis_instance *instance);
+
 /* Fills in the trap report of an instance whose call has trapped, unless it's filled in already:
  * from the trap of Stasis's own that the call has raised, if any, and otherwise from WAMR's. */
 void stasis_keep_trap(stasis_instance *instance);

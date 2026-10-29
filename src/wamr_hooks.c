@@ -106,6 +106,15 @@ void stasis_wamr_init_args(RuntimeInitArgs *args) {
     args->mem_alloc_option.allocator.free_func = free_function.object;
 }
 
+void *stasis_wamr_raw_pointer(stasis_wamr_raw_function *function) {
+    union {
+        stasis_wamr_raw_function *function;
+        void *object;
+    } pointer = {function};
+
+    return pointer.object;
+}
+
 void stasis_wamr_log(uint32_t level, const char *file, int line, const char *format, ...) {
     (void)level;
     (void)file;

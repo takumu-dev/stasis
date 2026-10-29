@@ -4,6 +4,7 @@
 /* NOLINTNEXTLINE(misc-include-cleaner): it defines the struct that stasis.h's type names */
 #include "objects.h"
 #include "platform.h"
+#include "system_interface.h"
 #include "wamr_hooks.h"
 
 #include <stdbool.h>
@@ -45,6 +46,10 @@ stasis_status stasis_library_create(const stasis_library_settings *settings,
         RuntimeInitArgs args;
         stasis_wamr_init_args(&args);
         initialised = wasm_runtime_full_init(&args);
+        if (initialised && !stasis_system_interface_register()) {
+            wasm_runtime_destroy();
+            initialised = false;
+        }
     }
     if (initialised) {
         library_count++;

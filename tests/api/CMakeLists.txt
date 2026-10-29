@@ -16,11 +16,16 @@
 #   handle_limit.*   instances running out of handles, under the test-only library's lower limit
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
+#   c_library.*      what a C script's standard library does through the system interface
+#   system_interface.*
+#                    the functions of the system interface, the load check of their imports, and
+#                    the library's hooks that they call
 #
-# Every script is a WAT module in scripts/, apart from three C scripts, and each says what it's for.
+# Every script is a WAT module in scripts/, apart from four C scripts, and each says what it's for.
 # Their names carry the hashes of the test interfaces' signatures, as `stasis-gen signatures` prints
 # them.
 
+stasis_generate(host c_library.stasis OUTPUT_DIRECTORY generated VARIABLE c_library_host)
 stasis_generate(host calls.stasis OUTPUT_DIRECTORY generated VARIABLE calls_host)
 stasis_generate(host early.stasis OUTPUT_DIRECTORY generated VARIABLE early_host)
 stasis_generate(host memory.stasis OUTPUT_DIRECTORY generated VARIABLE memory_host)
@@ -29,6 +34,7 @@ stasis_generate(host hosts.stasis OUTPUT_DIRECTORY generated VARIABLE hosts_host
 stasis_generate(host strings.stasis OUTPUT_DIRECTORY generated VARIABLE strings_host)
 stasis_generate(host records.stasis OUTPUT_DIRECTORY generated VARIABLE records_host)
 stasis_generate(host handles.stasis OUTPUT_DIRECTORY generated VARIABLE handles_host)
+stasis_generate(host system.stasis OUTPUT_DIRECTORY generated VARIABLE system_host)
 
 set(scripts
     abi_exports_wrong_types
@@ -74,6 +80,9 @@ set(scripts
     shared_memory
     start_section
     strings
+    system
+    system_may_leave
+    system_wrong_types
     traps
     two_memories
     unexported_global
@@ -88,7 +97,7 @@ foreach(script IN LISTS scripts)
 endforeach()
 
 # C scripts, built as a script author builds one, whose code is a compiler's.
-foreach(script IN ITEMS c_records c_script c_strings)
+foreach(script IN ITEMS c_library c_records c_script c_strings)
     stasis_add_c_script(${script} scripts/${script}.c)
     add_dependencies(stasis_api_scripts stasis_script_${script})
 endforeach()
@@ -131,7 +140,7 @@ endfunction()
 function(stasis_add_api_support suffix library)
     set(interfaces stasis_test_interfaces${suffix})
     stasis_add_host_sides(${interfaces} ${library}
-        ${calls_host} ${early_host} ${memory_host} ${traps_host}
+        ${c_library_host} ${calls_host} ${early_host} ${memory_host} ${system_host} ${traps_host}
     )
 
     set(support stasis_api_support${suffix})
@@ -150,7 +159,9 @@ endfunction()
 stasis_add_api_support("" stasis::stasis)
 stasis_add_api_support(_testing stasis_testing)
 
-foreach(program IN ITEMS libraries load snapshottable instances memory scalars traps)
+foreach(program IN ITEMS
+    libraries load snapshottable instances memory scalars traps system_interface c_library
+)
     stasis_add_test(${program} ${program}_test.c)
     target_link_libraries(stasis_test_${program} PRIVATE stasis_api_support)
 endforeach()

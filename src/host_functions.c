@@ -13,6 +13,7 @@
 #include "objects.h"
 #include "signature.h"
 #include "trap.h"
+#include "wamr_hooks.h"
 
 #include <lib_export.h>
 #include <stdbool.h>
@@ -36,14 +37,6 @@ union crossing {
 /* Rounds `size` up to a multiple of `alignment`. */
 static size_t align_up(size_t size, size_t alignment) {
     return (size + alignment - 1) / alignment * alignment;
-}
-
-/* Ends the call that `instance` is running with the trap of Stasis's own it has raised: WAMR
- * unwinds the call once the trampoline returns, and the trap report reads the raised trap. */
-static void end_call(stasis_instance *instance, wasm_exec_env_t exec_env) {
-    wasm_runtime_set_exception(wasm_runtime_get_module_inst(exec_env),
-                               instance->raised.message != NULL ? instance->raised.message
-                                                                : "Stasis raised a trap");
 }
 
 /* Lifts the string of `size` bytes at `address` in the script's memory that is `leaf`, one of a
@@ -360,7 +353,7 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
         const struct host_function_name name =
             stasis_host_function_name(instance->script->interface_data, function);
         stasis_refuse_leaving(instance, &name);
-        end_call(instance, exec_env);
+        stasis_end_call(instance);
         return;
     }
     unsigned char *arguments = instance->scratch;
@@ -379,7 +372,7 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
     const uint32_t area = has_area ? (uint32_t)core[spilled ? 1 : flat_count] : 0;
     if (!lifted || (has_area && !check_area(instance, linked, area)) ||
         !reserve_handles(instance, linked)) {
-        end_call(instance, exec_env);
+        stasis_end_call(instance);
         return;
     }
     function->thunk(instance, function->parameter_count > 0 ? arguments : NULL,
@@ -387,19 +380,19 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
     /* A host function that aborted the call has returned all the same, and its result is
      * ignored. */
     if (instance->raised.raised) {
-        end_call(instance, exec_env);
+        stasis_end_call(instance);
         return;
     }
     if (function->result == NULL) {
         return;
     }
     if (!check_result(instance, linked, result)) {
-        end_call(instance, exec_env);
+        stasis_end_call(instance);
         return;
     }
     if (!has_area) {
         if (!lower_flat_result(instance, linked, result, &core[0])) {
-            end_call(instance, exec_env);
+            stasis_end_call(instance);
         }
         return;
     }
@@ -408,19 +401,8 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
     const struct placed_value owner = {NULL, 0, function, NULL};
     if (!stasis_store_values(instance, &linked->layout.result, result, area, &owner) &&
         instance->raised.raised) {
-        end_call(instance, exec_env);
+        stasis_end_call(instance);
     }
-}
-
-/* WAMR takes a host function as an object pointer, which ISO C can't convert a function pointer
- * to, so it's read back through a union. */
-static void *trampoline_pointer(void) {
-    union {
-        void (*function)(wasm_exec_env_t, uint64_t *);
-        void *object;
-    } pointer = {trampoline};
-
-    return pointer.object;
 }
 
 /* A group's symbols being made: measured first, with `symbols` null, and then written. It goes on
@@ -468,7 +450,7 @@ static void add_symbol(struct group_builder *builder, const char *object,
         }
         NativeSymbol *symbol = &builder->symbols[builder->symbol_count];
         symbol->symbol = name;
-        symbol->func_ptr = trampoline_pointer();
+        symbol->func_ptr = stasis_wamr_raw_pointer(trampoline);
         symbol->signature = NULL;
         symbol->attachment = linked;
     }
