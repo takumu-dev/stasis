@@ -148,6 +148,8 @@ set(STASIS_CORE_SOURCES
     "${PROJECT_SOURCE_DIR}/src/snapshottable.c"
     "${PROJECT_SOURCE_DIR}/src/snapshottable.h"
     "${PROJECT_SOURCE_DIR}/src/status.c"
+    "${PROJECT_SOURCE_DIR}/src/system_interface.c"
+    "${PROJECT_SOURCE_DIR}/src/system_interface.h"
     "${PROJECT_SOURCE_DIR}/src/trap.c"
     "${PROJECT_SOURCE_DIR}/src/trap.h"
     "${PROJECT_SOURCE_DIR}/src/wamr_hooks.c"

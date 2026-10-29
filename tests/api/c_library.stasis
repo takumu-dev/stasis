@@ -1,0 +1,24 @@
+/// Entry points of a C script, each of which uses a part of the C library that reaches the system
+/// interface, which the tests of what the system interface gives a C script call.
+interface test:c_library@1.0.0;
+
+script user {
+    /// Prints "hello, " and then "world" and a newline to stdout, with two calls of printf.
+    fn print_line();
+    /// Prints "partial" to stdout, with no newline.
+    fn print_partial();
+    /// Prints "low health" to stderr, with no newline.
+    fn print_warning();
+    /// Fails `assert(health > 0)`.
+    fn fail_assert();
+    /// Returns what `time(NULL)` returns.
+    fn read_time() -> s64;
+    /// Returns what `arc4random()` returns.
+    fn draw_random() -> u32;
+    /// Returns whether `getenv("HOME")` returns other than null.
+    fn has_home() -> bool;
+    /// Calls `exit(0)`.
+    fn exit_zero();
+    /// Returns whether `fopen("save.txt", "r")` opens the file.
+    fn open_save() -> bool;
+}

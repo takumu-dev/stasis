@@ -436,8 +436,9 @@ stasis_library_destroy(library);
 - Every function that can fail returns a `stasis_status`, and out-parameters are null when it
   fails. `stasis_status_text` describes each code.
 - A library's settings hold the size of the stack each instance keeps its WebAssembly frames on,
-  64 KiB by default. A process may hold several libraries, and one library may hold scripts of
-  several interfaces.
+  64 KiB by default, and the hooks through which scripts write output and read the time and random
+  bytes, as [the system interface](#the-system-interface) says. A process may hold several
+  libraries, and one library may hold scripts of several interfaces.
 - Loading copies the module's bytes, so the host may free them as soon as it returns. It checks
   the module in stages, and stops at the first that fails: it must be valid WebAssembly
   (`STASIS_INVALID_MODULE`), built for the interface (`STASIS_WRONG_INTERFACE`), and for its line
@@ -451,8 +452,9 @@ stasis_library_destroy(library);
 - Stasis's rules make sure that creating an instance runs no script code and fails only for lack
   of memory. A script has no start section, and exports none of `_initialize`, `__wasm_call_ctors`
   and `__post_instantiate`, which a backend would run by itself. It imports only functions, from
-  its interface's groups and `wasi_snapshot_preview1`. Its active data and element segments fit
-  its memory and its tables as they start, and its memory starts with at most 65,535 pages.
+  its interface's groups, and the system interface's from `wasi_snapshot_preview1`, each of its
+  type. Its active data and element segments fit its memory and its tables as they start, and its
+  memory starts with at most 65,535 pages.
 - A loaded script answers its identity, the SHA-256 of its module's sections without the custom
   ones, so a copy stripped of its debug information is the same script, and which optional entry
   points it provides.
@@ -650,3 +652,68 @@ object.
   keep the handles of its result traps as `STASIS_TRAP_KIND_ALLOCATION_FAILED` before the host
   function runs, and an entry point's call that can't make room for the handles of its arguments is
   `STASIS_OUT_OF_MEMORY` before the script runs.
+
+### The system interface
+
+Beside its interface's host functions, every script may import the system interface: the 46
+functions of WASI preview 1, from `wasi_snapshot_preview1`, which every toolchain's standard library
+already targets, so a C script's `printf`, `assert` and `time` work as they are. Stasis answers them
+itself, the same way for every script, and keeps nothing of an instance's on the host's side, so
+whatever a script reaches through them is in its memory. A script reaches nothing outside its
+sandbox through them but what the host gives it, through three hooks in the library's settings,
+which share one user-data pointer:
+
+```c
+static void script_output(stasis_instance *instance, void *user_data, stasis_stream stream,
+                          const char *bytes, size_t size) {
+    /* the instance's own user data names the entity whose script wrote */
+    game_log(user_data, stasis_instance_user_data(instance), stream, bytes, size);
+}
+
+static bool game_clock(stasis_instance *instance, void *user_data, uint32_t clock,
+                       stasis_clock_reading reading, uint64_t precision, uint64_t *nanoseconds) {
+    /* the game's own time, so that every run of a script sees the same */
+    const game *world = user_data;
+    *nanoseconds = reading == STASIS_CLOCK_TIME ? world->ticks * TICK_NANOSECONDS
+                                                : TICK_NANOSECONDS;
+    return true;
+}
+
+stasis_library_settings settings = {0};
+settings.output = script_output;
+settings.clock = game_clock;
+settings.entropy = game_entropy;
+settings.hook_user_data = world;
+stasis_library_create(&settings, &library);
+```
+
+- **Output**: `fd_write` on fd 1 or 2, a script's stdout and stderr, calls the output hook with the
+  instance, the stream and each part of the write as the script wrote it. Stasis doesn't buffer
+  the bytes, split them into lines or check them as UTF-8. Without an output hook, output is
+  discarded, and the write still succeeds.
+- Fds 0 to 2 are character devices that can't be sought or told, so a C script buffers its stdout
+  by the line, and its stderr not at all. A line without its newline waits in the script's memory,
+  so it travels in snapshots, and is lost if the instance traps. A failed `assert` writes its
+  message to stderr, then traps as `STASIS_TRAP_KIND_UNREACHABLE`. Fd 0 always reads as the end of
+  the file.
+- **Clocks and randomness**: `clock_time_get` and `clock_res_get` call the clock hook with the WASI
+  clock that the script names, and whether it reads the time or the clock's resolution, and
+  `random_get` calls the entropy hook, whose bytes Stasis copies into the script's memory. Stasis
+  never reads the system's clock or entropy itself. Without the hook, or when it declines, the call
+  fails and writes nothing: a C script's `time()` returns 0, and its `arc4random()` traps.
+- The arguments and the environment are empty, so `getenv` finds nothing.
+- `proc_exit` traps as `STASIS_TRAP_KIND_EXIT`, with the status in the message, even for `exit(0)`,
+  which has run the script's `atexit` handlers and flushed its stdout by then. `sched_yield` returns
+  at once.
+- Everything else fails and changes nothing. A call on an fd above 2 fails with `badf`, seeking or
+  telling on fds 0 to 2 with `spipe`, and the rest with `notsup`, `poll_oneoff` included. There are
+  no files, directories or sockets, so `fopen` fails.
+- Loading checks each function that a script imports from `wasi_snapshot_preview1`, and one that
+  the system interface lacks, or has with another type, fails the load with
+  `STASIS_INVALID_SCRIPT`. A script that passes the system interface what it reads or writes
+  outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION` before any hook
+  is called, and so does one that calls it while Stasis is inside its `cabi_realloc` or a
+  `cabi_post_`.
+- Each hook runs inside the call into the instance it acts for, as a host function does, so it may
+  end the call with `stasis_abort`, and it can call into no script. A host can't turn the system
+  interface off: without hooks, it already reaches nothing.

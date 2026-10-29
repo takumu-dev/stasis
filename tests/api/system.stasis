@@ -1,0 +1,88 @@
+/// Entry points through which the tests of the system interface call each of its functions with
+/// the arguments they choose, and read and write the script's memory. Each script provides those
+/// it needs.
+interface test:system@1.0.0;
+
+script user {
+    /// Each calls the function of the system interface of its name with its arguments, and returns
+    /// the errno it returns. An argument called `at`, or ending in `_at`, is where in the script's
+    /// memory the function puts what it answers.
+    optional fn args_get(argv: u32, argv_buf: u32) -> u32;
+    optional fn args_sizes_get(count_at: u32, size_at: u32) -> u32;
+    optional fn clock_res_get(id: u32, at: u32) -> u32;
+    optional fn clock_time_get(id: u32, precision: u64, at: u32) -> u32;
+    optional fn environ_get(environment: u32, environment_buf: u32) -> u32;
+    optional fn environ_sizes_get(count_at: u32, size_at: u32) -> u32;
+    optional fn fd_advise(fd: u32, offset: u64, len: u64, advice: u32) -> u32;
+    optional fn fd_allocate(fd: u32, offset: u64, len: u64) -> u32;
+    optional fn fd_close(fd: u32) -> u32;
+    optional fn fd_datasync(fd: u32) -> u32;
+    optional fn fd_fdstat_get(fd: u32, at: u32) -> u32;
+    optional fn fd_fdstat_set_flags(fd: u32, fdflags: u32) -> u32;
+    optional fn fd_fdstat_set_rights(fd: u32, rights_base: u64, rights_inheriting: u64) -> u32;
+    optional fn fd_filestat_get(fd: u32, at: u32) -> u32;
+    optional fn fd_filestat_set_size(fd: u32, size: u64) -> u32;
+    optional fn fd_filestat_set_times(fd: u32, atim: u64, mtim: u64, fst_flags: u32) -> u32;
+    optional fn fd_pread(fd: u32, iovs: u32, iovs_len: u32, offset: u64, at: u32) -> u32;
+    optional fn fd_prestat_dir_name(fd: u32, path: u32, path_len: u32) -> u32;
+    optional fn fd_prestat_get(fd: u32, at: u32) -> u32;
+    optional fn fd_pwrite(fd: u32, iovs: u32, iovs_len: u32, offset: u64, at: u32) -> u32;
+    optional fn fd_read(fd: u32, iovs: u32, iovs_len: u32, at: u32) -> u32;
+    optional fn fd_readdir(fd: u32, buf: u32, buf_len: u32, cookie: u64, at: u32) -> u32;
+    optional fn fd_renumber(fd: u32, to: u32) -> u32;
+    optional fn fd_seek(fd: u32, offset: u64, whence: u32, at: u32) -> u32;
+    optional fn fd_sync(fd: u32) -> u32;
+    optional fn fd_tell(fd: u32, at: u32) -> u32;
+    optional fn fd_write(fd: u32, iovs: u32, iovs_len: u32, at: u32) -> u32;
+    optional fn path_create_directory(fd: u32, path: u32, path_len: u32) -> u32;
+    optional fn path_filestat_get(fd: u32, lookup: u32, path: u32, path_len: u32, at: u32) -> u32;
+    optional fn path_filestat_set_times(
+        fd: u32, lookup: u32, path: u32, path_len: u32, atim: u64, mtim: u64, fst_flags: u32
+    ) -> u32;
+    optional fn path_link(
+        old_fd: u32, old_flags: u32, old_path: u32, old_path_len: u32, new_fd: u32, new_path: u32,
+        new_path_len: u32
+    ) -> u32;
+    optional fn path_open(
+        fd: u32, dirflags: u32, path: u32, path_len: u32, oflags: u32, rights_base: u64,
+        rights_inheriting: u64, fdflags: u32, at: u32
+    ) -> u32;
+    optional fn path_readlink(
+        fd: u32, path: u32, path_len: u32, buf: u32, buf_len: u32, at: u32
+    ) -> u32;
+    optional fn path_remove_directory(fd: u32, path: u32, path_len: u32) -> u32;
+    optional fn path_rename(
+        fd: u32, old_path: u32, old_path_len: u32, new_fd: u32, new_path: u32, new_path_len: u32
+    ) -> u32;
+    optional fn path_symlink(
+        old_path: u32, old_path_len: u32, fd: u32, new_path: u32, new_path_len: u32
+    ) -> u32;
+    optional fn path_unlink_file(fd: u32, path: u32, path_len: u32) -> u32;
+    optional fn poll_oneoff(subscriptions: u32, events: u32, count: u32, at: u32) -> u32;
+    optional fn proc_exit(code: u32);
+    optional fn proc_raise(sig: u32) -> u32;
+    optional fn random_get(buf: u32, buf_len: u32) -> u32;
+    optional fn sched_yield() -> u32;
+    optional fn sock_accept(fd: u32, fdflags: u32, at: u32) -> u32;
+    optional fn sock_recv(
+        fd: u32, ri_data: u32, ri_data_len: u32, ri_flags: u32, at: u32, flags_at: u32
+    ) -> u32;
+    optional fn sock_send(fd: u32, si_data: u32, si_data_len: u32, si_flags: u32, at: u32) -> u32;
+    optional fn sock_shutdown(fd: u32, how: u32) -> u32;
+
+    /// Each loads the value at `address` in the script's memory, or stores `value` there.
+    optional fn load_u8(address: u32) -> u8;
+    optional fn load_u32(address: u32) -> u32;
+    optional fn load_u64(address: u32) -> u64;
+    optional fn store_u8(address: u32, value: u8);
+    optional fn store_u32(address: u32, value: u32);
+    optional fn store_u64(address: u32, value: u64);
+    /// Stores `count` iovecs at `address` in the script's memory, each of the `size` bytes at
+    /// `bytes`.
+    optional fn store_iovecs(address: u32, count: u32, bytes: u32, size: u32);
+
+    /// Takes a string, which Stasis puts into the script's memory with its `cabi_realloc`.
+    optional fn take(text: string);
+    /// Returns a string, which the script's `cabi_post_` frees.
+    optional fn give() -> string;
+}

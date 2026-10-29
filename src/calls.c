@@ -29,6 +29,12 @@ bool stasis_invoke(stasis_instance *instance, wasm_function_inst_t function, uin
     return returned;
 }
 
+void stasis_end_call(stasis_instance *instance) {
+    wasm_runtime_set_exception(instance->module_instance, instance->raised.message != NULL
+                                                              ? instance->raised.message
+                                                              : "Stasis raised a trap");
+}
+
 void stasis_keep_trap(stasis_instance *instance) {
     if (!instance->trap.filled) {
         stasis_trap_record_init(&instance->trap, instance->module_instance, &instance->script->code,
