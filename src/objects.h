@@ -7,6 +7,7 @@
 #include <stasis.h>
 #include <stasis_interface.h>
 
+#include "handles.h"
 #include "host_functions.h"
 #include "layout.h"
 #include "module.h"
@@ -106,6 +107,8 @@ struct stasis_instance {
     /* The room for a host function's arguments and result, while the instance calls one, which is
      * null when its script's interface has no host function Stasis calls. */
     unsigned char *scratch;
+    /* The handle the instance has for each host object it has been given. */
+    struct handle_table handles;
     /* The trap of Stasis's own that the call the instance is running has come to, if any. */
     struct raised_trap raised;
     /* The trap report, once the instance has trapped. */

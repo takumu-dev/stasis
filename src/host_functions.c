@@ -7,6 +7,7 @@
 #include "boundary.h"
 #include "calls.h"
 #include "descriptors.h"
+#include "handles.h"
 #include "layout.h"
 /* NOLINTNEXTLINE(misc-include-cleaner): it defines the struct that stasis.h's type names */
 #include "objects.h"
@@ -85,6 +86,41 @@ static bool lift_string(stasis_instance *instance, const stasis_host_function *f
     return true;
 }
 
+/* Lifts the handle `value` that is `leaf`, one of a host function's arguments or in one, into the
+ * pointer to the host object it names, at the leaf's offset in `arguments`, which is null when the
+ * handle was revoked. Returns false, having raised a boundary violation, if the instance was never
+ * given it, or it names a host object of another kind. */
+static bool lift_handle(stasis_instance *instance, const stasis_host_function *function,
+                        const struct leaf *leaf, uint32_t value, unsigned char *arguments) {
+    void *object = NULL;
+    uint32_t other_kind = 0;
+    const enum handle_fault fault =
+        stasis_handle_lift(&instance->handles, value, leaf->value.index, &object, &other_kind);
+    if (fault == HANDLE_CROSSES) {
+        stasis_store_object(arguments + leaf->value.offset, object);
+        return true;
+    }
+    const stasis_interface *interface_data = instance->script->interface_data;
+    const struct host_function_name name = stasis_host_function_name(interface_data, function);
+    if (fault == HANDLE_FORGED) {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the script passed " FIELD_FORMAT
+                                "argument %lu of " HOST_FUNCTION_NAME_FORMAT
+                                " as handle %lu, which the instance was never given",
+                                FIELD_ARGUMENTS(leaf->path), (unsigned long)leaf->position,
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)value);
+    } else {
+        (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_BOUNDARY_VIOLATION,
+                                "the script passed " FIELD_FORMAT
+                                "argument %lu of " HOST_FUNCTION_NAME_FORMAT
+                                " as handle %lu, which names a host object of another kind, `%s`",
+                                FIELD_ARGUMENTS(leaf->path), (unsigned long)leaf->position,
+                                HOST_FUNCTION_NAME_ARGUMENTS(name), (unsigned long)value,
+                                interface_data->kinds[other_kind].qualified_name);
+    }
+    return false;
+}
+
 /* Lifts a host function's arguments from the script's core arguments, each in a slot of its own,
  * into `arguments`. Returns false, having raised a boundary violation, if one can't cross. */
 static bool lift_flat(stasis_instance *instance, const struct linked_function *linked,
@@ -92,10 +128,21 @@ static bool lift_flat(stasis_instance *instance, const struct linked_function *l
     const struct layout *parameters = &linked->layout.parameters;
     for (size_t i = 0; i < parameters->leaf_count; i++) {
         const struct leaf *leaf = &parameters->leaves[i];
-        if (leaf->value.type != STASIS_TYPE_STRING) {
+        bool lifted = true;
+        switch (leaf->value.type) {
+        case STASIS_TYPE_STRING:
+            lifted = lift_string(instance, linked->descriptor, leaf, (uint32_t)core[leaf->slot],
+                                 (uint32_t)core[leaf->slot + 1], arguments);
+            break;
+        case STASIS_TYPE_HANDLE:
+            lifted = lift_handle(instance, linked->descriptor, leaf, (uint32_t)core[leaf->slot],
+                                 arguments);
+            break;
+        default:
             stasis_lift_raw_scalar(&leaf->value, &core[leaf->slot], arguments);
-        } else if (!lift_string(instance, linked->descriptor, leaf, (uint32_t)core[leaf->slot],
-                                (uint32_t)core[leaf->slot + 1], arguments)) {
+            break;
+        }
+        if (!lifted) {
             return false;
         }
     }
@@ -105,7 +152,7 @@ static bool lift_flat(stasis_instance *instance, const struct linked_function *l
 /* Lifts a host function's arguments from where the script spilled them in its memory, at
  * `address`, laid out as the canonical ABI lays out a tuple of them, into `arguments`. Returns
  * false, having raised a boundary violation, if they aren't all in the memory, or aren't aligned
- * as the strictest of them needs, or if a string among them can't cross. */
+ * as the strictest of them needs, or if a string or a handle among them can't cross. */
 static bool lift_spilled(stasis_instance *instance, const struct linked_function *linked,
                          uint32_t address, unsigned char *arguments) {
     const stasis_host_function *function = linked->descriptor;
@@ -139,10 +186,20 @@ static bool lift_spilled(stasis_instance *instance, const struct linked_function
     for (size_t i = 0; i < parameters->leaf_count; i++) {
         const struct leaf *leaf = &parameters->leaves[i];
         const unsigned char *at = tuple + leaf->memory_offset;
-        if (leaf->value.type != STASIS_TYPE_STRING) {
+        bool lifted = true;
+        switch (leaf->value.type) {
+        case STASIS_TYPE_STRING:
+            lifted = lift_string(instance, function, leaf, stasis_load_u32(at),
+                                 stasis_load_u32(at + 4), arguments);
+            break;
+        case STASIS_TYPE_HANDLE:
+            lifted = lift_handle(instance, function, leaf, stasis_load_u32(at), arguments);
+            break;
+        default:
             stasis_load_scalar(&leaf->value, at, arguments);
-        } else if (!lift_string(instance, function, leaf, stasis_load_u32(at),
-                                stasis_load_u32(at + 4), arguments)) {
+            break;
+        }
+        if (!lifted) {
             return false;
         }
     }
@@ -223,26 +280,70 @@ static bool check_returned_string(stasis_instance *instance, const stasis_host_f
     return false;
 }
 
-/* Lowers the result a host function returned, at `result`, into the return area at `area` in the
- * script's memory, putting each string it holds into the memory, once every one of them has been
- * checked. Returns false when the call is to end, having raised a trap, or because the script's
- * cabi_realloc trapped. */
-static bool lower_result(stasis_instance *instance, const struct linked_function *linked,
-                         const unsigned char *result, uint32_t area) {
+/* Checks the result a host function returned, at `result`, before any of it reaches the script:
+ * each string it holds, and each host object, which can't be null. Returns false, having raised a
+ * host abort, if one can't cross. */
+static bool check_result(stasis_instance *instance, const struct linked_function *linked,
+                         const unsigned char *result) {
     const struct layout *results = &linked->layout.result;
     for (size_t i = 0; i < results->leaf_count; i++) {
         const struct leaf *leaf = &results->leaves[i];
-        if (leaf->value.type != STASIS_TYPE_STRING) {
-            continue;
-        }
-        stasis_string string;
-        memcpy(&string, result + leaf->value.offset, sizeof string);
-        if (!check_returned_string(instance, linked->descriptor, leaf, string)) {
+        if (leaf->value.type == STASIS_TYPE_STRING) {
+            stasis_string string;
+            memcpy(&string, result + leaf->value.offset, sizeof string);
+            if (!check_returned_string(instance, linked->descriptor, leaf, string)) {
+                return false;
+            }
+        } else if (leaf->value.type == STASIS_TYPE_HANDLE &&
+                   stasis_load_object(result + leaf->value.offset) == NULL) {
+            const struct host_function_name name =
+                stasis_host_function_name(instance->script->interface_data, linked->descriptor);
+            (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HOST_ABORT,
+                                    "the host function " HOST_FUNCTION_NAME_FORMAT
+                                    " returned " FIELD_FORMAT "a null host object",
+                                    HOST_FUNCTION_NAME_ARGUMENTS(name),
+                                    RESULT_FIELD_ARGUMENTS(leaf->path));
             return false;
         }
     }
+    return true;
+}
+
+/* Makes room in the instance's handle table for each handle in a host function's result, before
+ * the host function runs, so that lowering the result can't fail for lack of memory. Returns false,
+ * having raised allocation_failed, if there's no memory for it. */
+static bool reserve_handles(stasis_instance *instance, const struct linked_function *linked) {
+    if (stasis_handle_table_reserve(&instance->handles, linked->layout.result.handle_count)) {
+        return true;
+    }
+    const struct host_function_name name =
+        stasis_host_function_name(instance->script->interface_data, linked->descriptor);
+    (void)stasis_raise_trap(
+        &instance->raised, STASIS_TRAP_KIND_ALLOCATION_FAILED,
+        "there was no memory for the handles of the result of " HOST_FUNCTION_NAME_FORMAT,
+        HOST_FUNCTION_NAME_ARGUMENTS(name));
+    return false;
+}
+
+/* Lowers the result a host function returned, at `result`, which has been checked and flattens
+ * into one core value, into the slot `core`. Returns false, having raised a trap, if the instance
+ * has no handle left for it. */
+static bool lower_flat_result(stasis_instance *instance, const struct linked_function *linked,
+                              const unsigned char *result, uint64_t *core) {
+    const stasis_value *value = &linked->layout.result.leaves[0].value;
+    if (value->type != STASIS_TYPE_HANDLE) {
+        stasis_lower_raw_scalar(value, result, core);
+        return true;
+    }
+    void *object = stasis_load_object(result + value->offset);
     const struct placed_value owner = {NULL, 0, linked->descriptor, NULL};
-    return stasis_store_values(instance, results, result, area, &owner);
+    uint32_t handle = 0;
+    if (!stasis_lower_handle(instance, &owner, value->index, object, &handle)) {
+        return false;
+    }
+    const stasis_value u32 = {STASIS_TYPE_U32, 0, 0};
+    stasis_lower_raw_scalar(&u32, &handle, core);
+    return true;
 }
 
 /* What WAMR calls in place of every host function, in its raw calling convention: with the script's
@@ -276,7 +377,8 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
      * area of the script's, whose address the script passes after its arguments. */
     const bool has_area = linked->layout.result.flat_count > STASIS_MAX_FLAT_RESULTS;
     const uint32_t area = has_area ? (uint32_t)core[spilled ? 1 : flat_count] : 0;
-    if (!lifted || (has_area && !check_area(instance, linked, area))) {
+    if (!lifted || (has_area && !check_area(instance, linked, area)) ||
+        !reserve_handles(instance, linked)) {
         end_call(instance, exec_env);
         return;
     }
@@ -291,12 +393,21 @@ static void trampoline(wasm_exec_env_t exec_env, uint64_t *core) {
     if (function->result == NULL) {
         return;
     }
-    if (!has_area) {
-        stasis_lower_raw_scalar(&linked->layout.result.leaves[0].value, result, &core[0]);
+    if (!check_result(instance, linked, result)) {
+        end_call(instance, exec_env);
         return;
     }
-    /* When cabi_realloc trapped of itself, WAMR unwinds the call already. */
-    if (!lower_result(instance, linked, result, area) && instance->raised.raised) {
+    if (!has_area) {
+        if (!lower_flat_result(instance, linked, result, &core[0])) {
+            end_call(instance, exec_env);
+        }
+        return;
+    }
+    /* The result goes into the return area, with each string it holds put into the script's
+     * memory. When cabi_realloc trapped of itself, WAMR unwinds the call already. */
+    const struct placed_value owner = {NULL, 0, function, NULL};
+    if (!stasis_store_values(instance, &linked->layout.result, result, area, &owner) &&
+        instance->raised.raised) {
         end_call(instance, exec_env);
     }
 }
@@ -329,8 +440,7 @@ struct group_builder {
 };
 
 /* Links a host function, or a method of the kind of host object called `object`, as the next
- * symbol. Measuring counts every host function, and writing only those whose values can cross. The
- * symbol's name is `<function>:<hash>`, or `<object>.<method>:<hash>`. */
+ * symbol, whose name is `<function>:<hash>`, or `<object>.<method>:<hash>`. */
 static void add_symbol(struct group_builder *builder, const char *object,
                        const stasis_host_function *function) {
     const size_t object_size = object == NULL ? 0 : strlen(object) + 1;
@@ -348,10 +458,6 @@ static void add_symbol(struct group_builder *builder, const char *object,
                                         function->parameter_count, function->result);
         if (laid_out != STASIS_OK) {
             builder->status = laid_out;
-            return;
-        }
-        if (!stasis_function_crosses(&linked->layout)) {
-            stasis_function_layout_free(&linked->layout);
             return;
         }
         char *name = builder->names + builder->names_size;

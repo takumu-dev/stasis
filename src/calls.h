@@ -58,11 +58,18 @@ bool stasis_reallocate(stasis_instance *instance, const struct placed_value *val
 bool stasis_place_string(stasis_instance *instance, const struct placed_value *value,
                          stasis_string string, uint32_t *address);
 
+/* Sets `handle` to the running instance's handle for `object`, of the kind `kind`, which is `value`
+ * as messages name it, issuing one into room reserved for it if the instance has none. Returns
+ * false, having raised handles_exhausted, if the instance has been given every handle it can
+ * have. */
+bool stasis_lower_handle(stasis_instance *instance, const struct placed_value *value, uint32_t kind,
+                         void *object, uint32_t *handle);
+
 /* Stores the values that `layout` lays out, from the C struct at `source`, into the running
  * instance's memory, as the tuple at `address`, which is in memory and aligned. Each string goes
- * into the memory as stasis_place_string puts it, and messages name it as part of `owner`, with
- * its leaf's position and path. Returns false when the call is to end, as stasis_place_string
- * does. */
+ * into the memory as stasis_place_string puts it, each host object as stasis_lower_handle lowers
+ * it, and messages name either as part of `owner`, with its leaf's position and path. Returns false
+ * when the call is to end, as stasis_place_string and stasis_lower_handle do. */
 bool stasis_store_values(stasis_instance *instance, const struct layout *layout, const void *source,
                          uint32_t address, const struct placed_value *owner);
 

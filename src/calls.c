@@ -6,6 +6,7 @@
 #include "allocator.h"
 #include "boundary.h"
 #include "descriptors.h"
+#include "handles.h"
 #include "layout.h"
 /* NOLINTNEXTLINE(misc-include-cleaner): it defines the struct that stasis.h's type names */
 #include "objects.h"
@@ -139,18 +140,44 @@ bool stasis_place_string(stasis_instance *instance, const struct placed_value *v
     return true;
 }
 
+bool stasis_lower_handle(stasis_instance *instance, const struct placed_value *value, uint32_t kind,
+                         void *object, uint32_t *handle) {
+    *handle = stasis_handle_of(&instance->handles, kind, object);
+    if (*handle != 0 || stasis_handle_issue(&instance->handles, kind, object, handle)) {
+        return true;
+    }
+    char *described = describe(instance, value);
+    (void)stasis_raise_trap(&instance->raised, STASIS_TRAP_KIND_HANDLES_EXHAUSTED,
+                            "the instance has been given all %lu handles it can have, and needs "
+                            "another for %s",
+                            (unsigned long)STASIS_HANDLE_LIMIT,
+                            described != NULL ? described : undescribed);
+    stasis_deallocate(described);
+    return false;
+}
+
 bool stasis_store_values(stasis_instance *instance, const struct layout *layout, const void *source,
                          uint32_t address, const struct placed_value *owner) {
     for (size_t i = 0; i < layout->leaf_count; i++) {
         const struct leaf *leaf = &layout->leaves[i];
+        struct placed_value value = *owner;
+        value.position = leaf->position;
+        value.path = leaf->path;
+        if (leaf->value.type == STASIS_TYPE_HANDLE) {
+            void *object = stasis_load_object((const unsigned char *)source + leaf->value.offset);
+            uint32_t handle = 0;
+            if (!stasis_lower_handle(instance, &value, leaf->value.index, object, &handle)) {
+                return false;
+            }
+            const struct script_memory memory = stasis_script_memory(instance->module_instance);
+            stasis_store_u32(memory.base + address + leaf->memory_offset, handle);
+            continue;
+        }
         if (leaf->value.type != STASIS_TYPE_STRING) {
             const struct script_memory memory = stasis_script_memory(instance->module_instance);
             stasis_store_scalar(&leaf->value, source, memory.base + address + leaf->memory_offset);
             continue;
         }
-        struct placed_value value = *owner;
-        value.position = leaf->position;
-        value.path = leaf->path;
         stasis_string string;
         memcpy(&string, (const unsigned char *)source + leaf->value.offset, sizeof string);
         uint32_t data = 0;

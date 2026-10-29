@@ -11,7 +11,9 @@
 #   host_functions.* scripts calling host functions, which the program defines
 #   strings.*        strings crossing both ways, and the load check of what that needs
 #   records.*        records crossing both ways, flat, spilled and in return areas
+#   handles.*        handles crossing both ways, the checks on them, and revoking them
 #   allocations.*    what calls with strings allocate, which the test-only library counts
+#   handle_limit.*   instances running out of handles, under the test-only library's lower limit
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
 #
@@ -26,6 +28,7 @@ stasis_generate(host traps.stasis OUTPUT_DIRECTORY generated VARIABLE traps_host
 stasis_generate(host hosts.stasis OUTPUT_DIRECTORY generated VARIABLE hosts_host)
 stasis_generate(host strings.stasis OUTPUT_DIRECTORY generated VARIABLE strings_host)
 stasis_generate(host records.stasis OUTPUT_DIRECTORY generated VARIABLE records_host)
+stasis_generate(host handles.stasis OUTPUT_DIRECTORY generated VARIABLE handles_host)
 
 set(scripts
     abi_exports_wrong_types
@@ -37,6 +40,7 @@ set(scripts
     early
     early_other_minor
     foreign_imports
+    handles
     host_bad_names
     host_mismatches
     host_wrong_types
@@ -186,6 +190,22 @@ stasis_add_test(records records_test.c)
 target_link_libraries(stasis_test_records PRIVATE
     stasis_api_support
     stasis_test_records_interface
+)
+
+# So does the host side of handles.stasis, whose host functions handle_hosts.c defines, for the
+# program that calls the handles script against the library, and the one that runs out of handles
+# against the test-only library.
+stasis_add_host_sides(stasis_test_handles_interface stasis::stasis ${handles_host})
+stasis_add_test(handles handles_test.c handle_hosts.c handle_hosts.h)
+target_link_libraries(stasis_test_handles PRIVATE
+    stasis_api_support
+    stasis_test_handles_interface
+)
+stasis_add_host_sides(stasis_test_handles_interface_testing stasis_testing ${handles_host})
+stasis_add_test(handle_limit handle_limit_test.c handle_hosts.c handle_hosts.h testing.h)
+target_link_libraries(stasis_test_handle_limit PRIVATE
+    stasis_api_support_testing
+    stasis_test_handles_interface_testing
 )
 
 # The load tests work out a script's identity apart from the library, with SHA-256 alone.

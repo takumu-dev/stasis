@@ -5,10 +5,10 @@ game, and saves and restores their state as snapshots.
 
 Stasis is at an early stage and has no release yet. So far, a host can load a script against its
 interface, learn whether it's snapshottable, create and start instances of it, call their entry
-points and have scripts call its host functions, with scalars and strings as arguments and results,
-and read the trap report of an instance that traps. The generator checks interface files and writes
-their host side and their WIT rendering. Records, handles, the system interface and snapshots are
-still to come.
+points and have scripts call its host functions, with scalars, strings, records and handles as
+arguments and results, revoke handles, and read the trap report of an instance that traps. The
+generator checks interface files and writes their host side and their WIT rendering. The system
+interface and snapshots are still to come.
 
 ## Requirements
 
@@ -495,9 +495,7 @@ A script calls the host functions its interface declares, which the host defines
 calls through the thunks in the host's side. Stasis lifts each argument from the script as the
 canonical ABI does it, and lowers the result back. Arguments that flatten into more than 16 core
 parameters spill into the script's memory, which Stasis reads them from, and a script that passes
-them outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. So far
-handles don't cross, so a script that calls a host function that takes or returns one, in a record
-or not, traps.
+them outside its memory, or misaligned, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`.
 
 - A host function ends the call it's part of with `stasis_abort`. It then returns as it would
   otherwise, Stasis ignores its result, and the call traps as `STASIS_TRAP_KIND_HOST_ABORT`, with
@@ -605,5 +603,50 @@ acme_dungeon_world_vec2 acme_dungeon_world_entity_position(stasis_instance *inst
 - Spilled arguments and a return area that are outside the script's memory, or misaligned, trap as
   `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`. A message names a string in a record by the fields it's in,
   outermost first and joined by dots, as in "the field `weapon` of argument 1 of `combat.alarm`".
-- So far handles don't cross, so a call to an entry point that takes or returns one, in a record or
-  not, is refused with `STASIS_INVALID_ARGUMENT`.
+
+### Handles
+
+A host object reaches a script only as a handle: a `u32` that names it in one instance. On the
+host's side, a host object is a pointer to its kind's opaque type, which Stasis never dereferences,
+and which the host converts to and from a pointer to its own object. A host object is that pointer
+together with its kind, so one pointer of two kinds is two host objects. Null is never a host
+object.
+
+- Each instance has handles of its own. They're issued in order from 1, one for each host object,
+  as each first crosses into the instance, so within an instance a host object always crosses as the
+  same handle, and a script can compare handles and keep them as keys. 0 is never a handle.
+- Handles cross as host functions' arguments and results, as the host object a method is called on,
+  as entry points' arguments and results, and as records' fields. A handle crosses as one `i32`, and
+  lies in memory as 4 bytes.
+- A host function that returns a null host object, in a record or not, traps as
+  `STASIS_TRAP_KIND_HOST_ABORT`, with a message that names it, and an entry point's argument that's
+  null, or holds one, makes the call `STASIS_INVALID_ARGUMENT`, before the script runs.
+- The host revokes an instance's handle for a host object, such as an entity that has died, with
+  `stasis_instance_revoke`. It takes the instance, the kind's id and the host object, and does
+  nothing if the instance has no handle for it, or the host object is null, as a revoked handle
+  reaches a host function. Revoking runs no script code, so it's allowed in
+  every state, running included, and a host function may revoke a handle in the instance that
+  called it at once. A host that frees a host object without revoking it in every instance that may
+  hold its handle leaves those handles naming a dangling pointer, which host functions then
+  receive.
+
+  ```c
+  void acme_dungeon_combat_kill(stasis_instance *instance, acme_dungeon_world_entity *target) {
+      stasis_instance_revoke(instance, ACME_DUNGEON_WORLD_ENTITY_KIND, target);
+      world_destroy(target);
+  }
+  ```
+- A revoked handle names nothing, but it's never reused. A script may still pass it to host
+  functions, which receive it as null and decide for themselves what a dead entity's query returns,
+  and an entry point that returns it gives the host null. A host object whose handle was revoked
+  gets a new handle if it crosses into the instance again.
+- A handle that the instance was never given is forged. A script that passes a forged handle to a
+  host function, or one that names a host object of another kind than the value it crosses as, or
+  returns either from an entry point, traps as `STASIS_TRAP_KIND_BOUNDARY_VIOLATION`, before the
+  host sees it.
+- An instance can be given 4,294,967,295 handles over its life, every `u32` but 0, since handles are
+  never reused. A call that needs one more, for a host function's result or an entry point's
+  argument, traps as `STASIS_TRAP_KIND_HANDLES_EXHAUSTED`. A host function's call with no memory to
+  keep the handles of its result traps as `STASIS_TRAP_KIND_ALLOCATION_FAILED` before the host
+  function runs, and an entry point's call that can't make room for the handles of its arguments is
+  `STASIS_OUT_OF_MEMORY` before the script runs.
