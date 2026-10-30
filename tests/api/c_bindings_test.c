@@ -532,16 +532,15 @@ struct sections {
 /* Reads an unsigned LEB128 number of at most 32 bits. */
 static uint32_t read_number(const uint8_t **at, const uint8_t *end) {
     uint32_t number = 0;
-    for (unsigned shift = 0; shift < 35; shift += 7) {
+    bool last = false;
+    for (unsigned shift = 0; shift < 35 && !last; shift += 7) {
         ASSERT_TRUE(*at < end);
         const uint8_t byte = *(*at)++;
         number |= (uint32_t)(byte & 0x7f) << shift;
-        if ((byte & 0x80) == 0) {
-            return number;
-        }
+        last = (byte & 0x80) == 0;
     }
-    ASSERT_TRUE(false);
-    return 0;
+    ASSERT_TRUE(last);
+    return number;
 }
 
 /* Moves to the next section, setting its id and where its contents are, or returns false after the
