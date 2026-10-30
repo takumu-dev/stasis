@@ -1,6 +1,8 @@
 * text=auto eol=lf
 # NIST's test vectors, kept byte for byte as NIST publishes them.
 tests/nist/*.rsp -text
+# The licence notices that C scripts carry, kept byte for byte as the C bindings write them.
+generator/wasi_libc_notices.txt -text
 # Interfaces whose lines end in CRLF, as an editor on Windows may write them.
 tests/generator/valid/crlf.stasis -text
 tests/generator/invalid/crlf_columns.stasis -text

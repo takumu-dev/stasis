@@ -23,7 +23,7 @@ if(STASIS_CLANG_FORMAT)
         "${PROJECT_SOURCE_DIR}/tests/*.h"
     )
     # The generator's golden outputs are formatted as the generator writes them.
-    list(FILTER sources EXCLUDE REGEX "/tests/generator/host/")
+    list(FILTER sources EXCLUDE REGEX "/tests/generator/(c|host)/")
     add_custom_target(check-format
         COMMAND "${STASIS_CLANG_FORMAT}" --dry-run --Werror ${sources}
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"

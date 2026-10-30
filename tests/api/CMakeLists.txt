@@ -18,13 +18,16 @@
 #   traps.*          calls that trap, and the trap reports they leave
 #   printing.*       where WAMR's printing goes when a script traps
 #   c_library.*      what a C script's standard library does through the system interface
+#   c_bindings.*     C scripts built against the C bindings of the sample interface alone
+#   c_shapes.*       values of each shape crossing through the C bindings
 #   system_interface.*
 #                    the functions of the system interface, the load check of their imports, and
 #                    the library's hooks that they call
 #
-# Every script is a WAT module in scripts/, apart from four C scripts, and each says what it's for.
-# Their names carry the hashes of the test interfaces' signatures, as `stasis-gen signatures` prints
-# them.
+# Every script is a WAT module in scripts/, apart from the C scripts, and each says what it's for.
+# The names in the WAT modules and in four of the C scripts carry the hashes of the test interfaces'
+# signatures, as `stasis-gen signatures` prints them. The rest of the C scripts are built against
+# the C bindings that stasis_generate writes.
 
 stasis_generate(host c_library.stasis OUTPUT_DIRECTORY generated VARIABLE c_library_host)
 stasis_generate(host calls.stasis OUTPUT_DIRECTORY generated VARIABLE calls_host)
@@ -104,6 +107,31 @@ foreach(script IN ITEMS c_library c_records c_script c_strings)
     stasis_add_c_script(${script} scripts/${script}.c)
     add_dependencies(stasis_api_scripts stasis_script_${script})
 endforeach()
+
+# C scripts built against C bindings alone, as a script author builds a script from a modding kit:
+# the dungeon scripts, against those of the sample interface, from dungeon_npc.c, which they share,
+# and a source of their own, and shapes.wasm, against those of shapes.stasis. Both interfaces are
+# among the generator's valid interfaces, whose golden C bindings the build compiles with warnings.
+set(dungeon "${PROJECT_SOURCE_DIR}/tests/generator/valid/dungeon.stasis")
+set(shapes "${PROJECT_SOURCE_DIR}/tests/generator/valid/shapes.stasis")
+stasis_generate(host "${dungeon}" OUTPUT_DIRECTORY generated VARIABLE dungeon_host)
+stasis_generate(host "${shapes}" OUTPUT_DIRECTORY generated VARIABLE shapes_host)
+set(bindings "${CMAKE_CURRENT_BINARY_DIR}/bindings")
+stasis_generate(c "${dungeon}" OUTPUT_DIRECTORY "${bindings}" VARIABLE dungeon_bindings)
+stasis_generate(c "${shapes}" OUTPUT_DIRECTORY "${bindings}" VARIABLE shapes_bindings)
+foreach(script IN ITEMS guard merchant)
+    stasis_add_c_script(dungeon_${script}
+        scripts/dungeon_npc.c scripts/dungeon_${script}.c "${bindings}/example_dungeon_npc.c"
+        INCLUDE_DIRECTORIES "${bindings}"
+        DEPENDS ${dungeon_bindings}
+    )
+    add_dependencies(stasis_api_scripts stasis_script_dungeon_${script})
+endforeach()
+stasis_add_c_script(shapes scripts/shapes.c "${bindings}/test_shapes_user.c"
+    INCLUDE_DIRECTORIES "${bindings}"
+    DEPENDS ${shapes_bindings}
+)
+add_dependencies(stasis_api_scripts stasis_script_shapes)
 
 # Copies of identity.wasm and traps.wasm without their custom sections, which are the same scripts:
 # the first without a section of its own, and the second without its name section.
@@ -229,6 +257,27 @@ target_link_libraries(stasis_test_snapshots PRIVATE
     stasis_api_support
     stasis_test_snapshots_interface
 )
+
+# So does the host side of dungeon.stasis, whose host functions the program of the C bindings
+# defines. It reads the notices that the C bindings hold from the generator's sources, and checks
+# them with SHA-256, against the pinned wasi-sdk they're for.
+stasis_add_host_sides(stasis_test_dungeon_interface stasis::stasis ${dungeon_host})
+stasis_add_test(c_bindings c_bindings_test.c)
+target_link_libraries(stasis_test_c_bindings PRIVATE
+    stasis_api_support
+    stasis_test_dungeon_interface
+    stasis_sha256
+)
+stasis_pinned_version(stasis_wasi_sdk_version wasi-sdk)
+target_compile_definitions(stasis_test_c_bindings PRIVATE
+    STASIS_NOTICES_FILE="${PROJECT_SOURCE_DIR}/generator/wasi_libc_notices.txt"
+    STASIS_PINNED_WASI_SDK="${stasis_wasi_sdk_version}"
+)
+
+# So does the host side of shapes.stasis, whose host functions the program of shapes defines.
+stasis_add_host_sides(stasis_test_shapes_interface stasis::stasis ${shapes_host})
+stasis_add_test(c_shapes c_shapes_test.c)
+target_link_libraries(stasis_test_c_shapes PRIVATE stasis_api_support stasis_test_shapes_interface)
 
 # The load tests work out a script's identity apart from the library, with SHA-256 alone.
 target_link_libraries(stasis_test_load PRIVATE stasis_sha256)

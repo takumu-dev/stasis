@@ -23,9 +23,9 @@ static const char keywords[] =
     " typeof typeof_unqual union unsigned using virtual void volatile wchar_t while xor xor_eq ";
 
 /* The lowercase object-like macros that common headers or compilers define, each between
- * spaces. */
+ * spaces. wasi-libc's stdlib.h defines alloca, unless a strict standard is asked for. */
 static const char macros[] =
-    " bool errno false far interface linux near small stderr stdin stdout true unix ";
+    " alloca bool errno false far interface linux near small stderr stdin stdout true unix ";
 
 /* The generator's own parameters, beside which a parameter of an interface's is declared, each
  * between spaces. */
@@ -358,6 +358,7 @@ void check_c_names(const struct interface *interface, const char *prefix, struct
         }
     }
     add_c_name(&check, "interface", "the interface's descriptors", "", interface->position);
+    add_c_name(&check, "string", "the C bindings' string type", "", interface->position);
 
     qsort(check.names, check.name_count, sizeof *check.names, compare_c_names);
     report_clashing_declarations(&check);

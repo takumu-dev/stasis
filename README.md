@@ -8,8 +8,8 @@ interface, learn whether it's snapshottable, create and start instances of it, c
 points and have scripts call its host functions, with scalars, strings, records and handles as
 arguments and results, revoke handles, answer the system interface through its hooks, read the
 trap report of an instance that traps, and snapshot instances and restore them. The generator
-checks interface files and writes their host side and their WIT rendering. The C language pack's
-bindings are still to come.
+checks interface files and writes their host side, their C bindings and their WIT rendering. The C
+language pack's guide for script authors is still to come.
 
 ## Requirements
 
@@ -277,6 +277,7 @@ script npc {
 
 | Command | What it does |
 |---|---|
+| `stasis-gen c [--prefix <prefix>] [--output-directory <dir>] <file>` | Writes the C bindings of the kind of script, as a C header and source, for C scripts to be built with |
 | `stasis-gen check <file>` | Checks the interface, and writes nothing |
 | `stasis-gen host [--prefix <prefix>] [--output-directory <dir>] <file>` | Writes the host's side of the interface, as a C header and source |
 | `stasis-gen signatures <file>` | Prints each host function's, method's and entry point's name, the encoding of its signature, and that encoding's hash, which names it in a script |
@@ -332,9 +333,67 @@ Names join their scopes with `_`, so two declarations can come out with the same
 `world.entity_find` would beside `world.entity.find`, or as `world.vec2_free` would beside the
 `_free` helper that the C bindings give a record `world.vec2` that holds a string. That's an error
 in the interface, which every command reports. A parameter or field named after a keyword of C or
-C++, a common lowercase macro such as `errno` or `small`, or one of `instance`, `self` and
-`result`, takes a `_` after its name in C. One that comes out as a type or function the host's
-side uses, such as `uint32_t` or `stasis_call`, or as another declaration's C name, is an error.
+C++, a common lowercase macro such as `errno`, `small` or `alloca`, or one of `instance`, `self`
+and `result`, takes a `_` after its name in C. One that comes out as a type or function the host's
+side uses, such as `uint32_t` or `stasis_call`, or as another declaration's C name, such as
+`acme_dungeon_string`, is an error.
+
+### The C bindings
+
+`stasis-gen c` writes the C bindings of the kind of script, which a host ships to script authors
+with its interface file. A C script includes the header, and is built with wasi-sdk for
+`wasm32-wasip1` from its own sources and the bindings' source. The two files include nothing but
+the C library's headers, so a script needs nothing else of Stasis's. For `acme:dungeon@1.2.0`
+they're `acme_dungeon_npc.h` and `acme_dungeon_npc.c`, named after the prefix and the kind of
+script, and they hold:
+
+- `acme_dungeon_string`, which holds `size` bytes of UTF-8 at `data`, and
+  `acme_dungeon_string_of`, which makes one of a C string without copying it;
+- a struct for each record, with a `_free` helper for each that holds a string, and a struct of
+  one `uint32_t handle` for each kind of host object, so that passing a handle of one kind where
+  another is expected fails to compile. Two handles are equal exactly when they name the same host
+  object;
+- a function for each host function and method of the groups the kind of script uses, which
+  returns its result by value, and calls the host through an import named as Stasis names it;
+- a prototype of each entry point, which the script defines, and a macro for each optional one;
+- the exports that Stasis calls: `stasis_initialize`, which runs the script's constructors once,
+  when Stasis starts a new instance, an export of each entry point, `cabi_realloc`, on top of the C
+  library's `realloc`, when Stasis needs to put strings or spilled arguments into the script's
+  memory, and a `cabi_post_*` for each entry point that returns a string;
+- the licence notices of wasi-sdk's C library, in a custom section named `notices`, so that every
+  C script carries them.
+
+```c
+/* world.find and world.entity.name: through these, a script calls the host */
+acme_dungeon_world_entity acme_dungeon_world_find(acme_dungeon_string name);
+acme_dungeon_string acme_dungeon_world_entity_name(acme_dungeon_world_entity self);
+
+/* npc.tick: a required entry point, which a script defines by its name */
+void acme_dungeon_npc_tick(uint64_t frame) {
+    acme_dungeon_world_entity self = acme_dungeon_world_find(acme_dungeon_string_of("guard"));
+    acme_dungeon_string name = acme_dungeon_world_entity_name(self);
+    free(name.data);
+}
+
+/* npc.on_hit: an optional entry point, which a script that provides it defines through its macro */
+ACME_DUNGEON_NPC_ON_HIT(acme_dungeon_world_entity by, uint32_t damage) {
+    acme_dungeon_combat_attack(by, damage);
+}
+```
+
+The macro of an optional entry point expands to the entry point's export, and then to the start of
+the function's definition, so a script exports an optional entry point exactly when it defines it,
+and the compiler checks the definition against the header's prototype.
+
+Strings that a script passes to a host function stay its own, and those a host function returns,
+records' included, are the script's to free. An entry point's arguments are borrowed: its export
+frees the strings in them once the script's function returns, so a script copies any it keeps.
+What an entry point returns is copied, and its `cabi_post_*` frees the copy, so it can return a
+string literal or a string it keeps.
+
+The header fails to compile unless `__wasm32__` and `__wasi__` are defined, and when
+`__wasm_atomics__` or `_REENTRANT` is, so a script built for another target or with threads fails
+at its first include. It and the source compile as C99 and later, with `-Wall -Wextra -pedantic`.
 
 ### The WIT rendering
 
@@ -399,9 +458,9 @@ target_sources(game PRIVATE ${dungeon_host})
 target_include_directories(game PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen)
 ```
 
-`PREFIX <prefix>` passes `--prefix`, and `stasis_generate(wit ...)` writes the WIT rendering. The
-build is configured again whenever the interface file changes, since the files' names come from its
-header.
+`PREFIX <prefix>` passes `--prefix`, `stasis_generate(c ...)` writes the C bindings, and
+`stasis_generate(wit ...)` writes the WIT rendering. The build is configured again whenever the
+interface file changes, since the files' names come from its header.
 
 A cross-compiling build can't build the generator. It sets `STASIS_GENERATOR` to the `stasis-gen`
 of a native build of the same version of Stasis, which `stasis_generate` checks with `--version`.

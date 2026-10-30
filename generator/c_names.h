@@ -1,18 +1,23 @@
 /* The names that an interface's declarations take in C, and the check that no two are the same.
  *
- * Every name that the host's side of an interface declares outside a function starts with a
- * prefix, which is `<namespace>_<name>_` unless the host chooses another:
+ * Every name that the host's side or the C bindings of an interface declare outside a function
+ * starts with a prefix, which is `<namespace>_<name>_` unless the host chooses another:
  *
- *     <prefix><group>_<object>           a kind of host object's opaque type
+ *     <prefix><group>_<object>           a kind of host object's opaque type, or its handle struct
  *     <prefix><group>_<record>           a record's struct
+ *     <prefix><group>_<record>_free      the C bindings' helper that frees a record's strings
  *     <prefix><group>_<function>         a host function
  *     <prefix><group>_<object>_<method>  a method
- *     <prefix><script>_<entry point>     an entry point's typed caller
+ *     <prefix><script>_<entry point>     an entry point, or its typed caller
  *     <prefix>interface                  the interface's descriptors
+ *     <prefix>string                     the C bindings' string type
+ *     <prefix>string_of                  the C bindings' helper that makes one
  *
- * Its macros are uppercase: each kind of host object's and entry point's name with `_KIND` or
- * `_ENTRY` after it, and the include guard. Everything else the generated source declares ends in
- * `_`, which no name in an interface can, so it never meets any of these.
+ * Their macros are uppercase: on the host's side, each kind of host object's and entry point's
+ * name with `_KIND` or `_ENTRY` after it, in the C bindings, each optional entry point's name, and
+ * the include guards, of which the C bindings' ends in `_`. Everything else the generated code
+ * declares ends in `_`, which no name in an interface can, or is a name that Stasis calls, such as
+ * stasis_initialize and cabi_realloc, which no prefix gives, so it never meets any of these.
  *
  * Joining scopes with `_` can give two declarations the same name, as with `world.entity_find`
  * beside `world.entity.find`. That's an error in the interface, which every command reports.
