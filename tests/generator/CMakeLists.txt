@@ -7,6 +7,12 @@
 #   generator.host.<name>        host writes exactly the files in host/<name>/, the golden host
 #                                side of valid/<name>.stasis, or for crlf_prefixed, of crlf.stasis
 #                                with a prefix of its own
+#   generator.c.<name>           c writes exactly the files in c/<name>/, the golden C bindings of
+#                                valid/<name>.stasis, or for crlf_prefixed, of crlf.stasis with a
+#                                prefix of its own
+#   generator.c_header_refuses.<what>
+#                                a golden C bindings' header refuses to compile for a target that
+#                                isn't wasm32-wasip1, or with threads
 #   generator.wit.<name>         wit writes exactly the file in wit/<name>/, the golden WIT
 #                                rendering of valid/<name>.stasis
 #   generator.wasm_tools_reads_wit.<name>
@@ -16,13 +22,16 @@
 #   generator.stasis_generate.*  the CMake function that runs stasis-gen in a build: in this build,
 #                                and in a host's build that names its own stasis-gen
 #
-# The golden host sides and WIT renderings are rewritten on purpose, by building the target
-# rewrite-generator-goldens, and never by a test.
+# The golden host sides, C bindings and WIT renderings are rewritten on purpose, by building the
+# target rewrite-generator-goldens, and never by a test.
 #
 # The build compiles each golden host side as a host's compiler sees it: its header on its own as
 # C99, as C++11 and as the newest C++, and its source as C99, all pedantic and with Stasis's own
 # warnings. The host side of escaping.stasis is compiled again with the lowercase macros it
-# escapes defined.
+# escapes defined. It compiles each golden C bindings as a script author's build does, with the
+# pinned wasi-sdk and the flags of C scripts: its header on its own and its source, each as C99 and
+# as GNU C17, wasi-sdk's default, in which the C library's headers define more macros, pedantic and
+# with -Wall and -Wextra as errors.
 #
 # stasis-gen runs in the interface's directory and is given the file's name alone, so the path in
 # each diagnostic is the bare file name.
@@ -55,14 +64,15 @@ set(usage
     [[usage: stasis-gen <command> \[<option>\.\.\.\] <interface file>]]
     [[       stasis-gen --version]]
     [[commands:]]
+    [[  c           write the C bindings of each kind of script, as a C header and source]]
     [[  check       check the interface file, and write nothing]]
     [[  host        write the host's side of the interface, as a C header and source]]
     [[  signatures  print the signature encoding and hash of each host function, method and entry]]
     [[              point]]
     [[  wit         write the interface's WIT rendering]]
-    [[options of host:]]
+    [[options of c and host:]]
     [[  --prefix <prefix>         start every C name with <prefix>, not <namespace>_<name>_]]
-    [[options of host and wit:]]
+    [[options of c, host and wit:]]
     [[  --output-directory <dir>  write into <dir>, not the current directory]]
 )
 
@@ -117,8 +127,8 @@ function(stasis_add_generator_output_check name)
     )
 endfunction()
 
-# Like check, signatures prints only the diagnostics of an interface with errors, and host and wit
-# print them and write nothing. Every command reports C names and WIT names that clash.
+# Like check, signatures prints only the diagnostics of an interface with errors, and c, host and
+# wit print them and write nothing. Every command reports C names and WIT names that clash.
 stasis_add_generator_output_check(signatures_prints_nothing_for_an_invalid_interface
     DIRECTORY invalid
     ARGS signatures no_script.stasis
@@ -145,6 +155,13 @@ stasis_add_generator_output_check(host_writes_nothing_for_an_invalid_interface
     DIAGNOSTICS "${CMAKE_CURRENT_SOURCE_DIR}/invalid/c_name_clashes.stasis"
     EMPTY_DIRECTORY "${nothing_written}/host"
 )
+stasis_add_generator_output_check(c_writes_nothing_for_an_invalid_interface
+    DIRECTORY invalid
+    ARGS c --output-directory "${nothing_written}/c" c_name_clashes.stasis
+    EXIT_CODE 1
+    DIAGNOSTICS "${CMAKE_CURRENT_SOURCE_DIR}/invalid/c_name_clashes.stasis"
+    EMPTY_DIRECTORY "${nothing_written}/c"
+)
 stasis_add_generator_output_check(wit_writes_nothing_for_an_invalid_interface
     DIRECTORY invalid
     ARGS wit --output-directory "${nothing_written}/wit" wit_name_clashes.stasis
@@ -153,7 +170,7 @@ stasis_add_generator_output_check(wit_writes_nothing_for_an_invalid_interface
     EMPTY_DIRECTORY "${nothing_written}/wit"
 )
 
-# host's and wit's options, and the files they write.
+# The options of c, host and wit, and the files they write.
 stasis_add_generator_check(host_refuses_a_prefix_with_capitals ARGS host --prefix Acme_ crlf.stasis
     EXIT_CODE 2
     LINES "stasis-gen: the prefix `Acme_` isn't lowercase snake_case with a `_` after its last word"
@@ -197,12 +214,17 @@ stasis_add_generator_check(host_refuses_a_directory_it_cant_write
     EXIT_CODE 2
     LINES "stasis-gen: can't write missing/test_crlf\\.h: .+"
 )
+stasis_add_generator_check(c_refuses_a_directory_it_cant_write
+    ARGS c --output-directory missing crlf.stasis
+    EXIT_CODE 2
+    LINES "stasis-gen: can't write missing/test_crlf_npc\\.h: .+"
+)
 stasis_add_generator_check(wit_refuses_a_directory_it_cant_write
     ARGS wit --output-directory missing crlf.stasis
     EXIT_CODE 2
     LINES "stasis-gen: can't write missing/test-crlf\\.wit: .+"
 )
-foreach(command IN ITEMS host wit)
+foreach(command IN ITEMS c host wit)
     add_test(NAME generator.${command}_rewrites_only_changed_files
         COMMAND "${CMAKE_COMMAND}"
             "-DGENERATOR=${generator}"
@@ -243,9 +265,9 @@ foreach(interface IN LISTS invalid_interfaces)
     )
 endforeach()
 
-# Adds generator.<command>.<name>, which checks that `command`, host or wit, writes exactly the files
-# of the golden directory <command>/<name>/ for `interface`, with the options that follow it, and
-# adds the commands that rewrite that golden directory to rewrite-generator-goldens.
+# Adds generator.<command>.<name>, which checks that `command`, c, host or wit, writes exactly the
+# files of the golden directory <command>/<name>/ for `interface`, with the options that follow it,
+# and adds the commands that rewrite that golden directory to rewrite-generator-goldens.
 set(rewrite_commands "")
 function(stasis_add_golden command name interface)
     set(output "${CMAKE_CURRENT_BINARY_DIR}/${command}/${name}")
@@ -271,8 +293,10 @@ foreach(interface IN LISTS valid_interfaces)
     cmake_path(GET interface STEM name)
     stasis_add_golden(host ${name} ${file})
     stasis_add_golden(wit ${name} ${file})
+    stasis_add_golden(c ${name} ${file})
 endforeach()
 stasis_add_golden(host crlf_prefixed crlf.stasis --prefix my_crlf_)
+stasis_add_golden(c crlf_prefixed crlf.stasis --prefix my_crlf_)
 
 add_custom_target(rewrite-generator-goldens
     ${rewrite_commands}
@@ -305,20 +329,87 @@ foreach(source IN LISTS golden_sources)
     stasis_add_compile_check(stasis_host_source_check_${name} "${source}" C 99)
 endforeach()
 
+# Compiles `source`, which is a golden C bindings' source or includes the golden header `header`,
+# with the pinned wasi-sdk's clang as C scripts are compiled, as the C `standard`, pedantic and with
+# -Wall and -Wextra as errors, as part of the target stasis_c_bindings_checks.
+set(c_bindings_checks "")
+function(stasis_add_c_bindings_check name source header standard)
+    cmake_path(GET header PARENT_PATH directory)
+    set(object "${CMAKE_CURRENT_BINARY_DIR}/c_bindings_checks/${name}_${standard}.o")
+    add_custom_command(OUTPUT "${object}"
+        COMMAND "${STASIS_WASI_CLANG}" ${STASIS_C_SCRIPT_FLAGS} "--sysroot=${STASIS_WASI_SYSROOT}"
+            -std=${standard} -pedantic -Wall -Wextra -Werror "-I${directory}" -c "${source}"
+            -o "${object}"
+        DEPENDS "${source}" "${header}"
+        COMMENT "Compiling ${name} as ${standard}"
+        VERBATIM
+    )
+    list(APPEND c_bindings_checks "${object}")
+    set(c_bindings_checks "${c_bindings_checks}" PARENT_SCOPE)
+endfunction()
+
+file(GLOB golden_bindings CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/c/*/*.h")
+foreach(header IN LISTS golden_bindings)
+    cmake_path(GET header PARENT_PATH directory)
+    cmake_path(GET directory FILENAME golden)
+    cmake_path(GET header STEM name)
+    cmake_path(GET header FILENAME file)
+    set(header_check "${CMAKE_CURRENT_BINARY_DIR}/c_bindings_checks/${golden}_${name}_header.c")
+    file(CONFIGURE OUTPUT "${header_check}" CONTENT "#include <@file@>\n#include <@file@>\n" @ONLY)
+    foreach(standard IN ITEMS c99 gnu17)
+        stasis_add_c_bindings_check(${golden}_${name}_header "${header_check}" "${header}"
+            ${standard}
+        )
+        stasis_add_c_bindings_check(${golden}_${name} "${directory}/${name}.c" "${header}"
+            ${standard}
+        )
+    endforeach()
+endforeach()
+add_custom_target(stasis_c_bindings_checks ALL DEPENDS ${c_bindings_checks})
+
+# A golden C bindings' header refuses to compile without __wasm32__ or __wasi__, or with
+# __wasm_atomics__ or _REENTRANT, saying why in its first error. The compiler stops there, before
+# the C library's headers, which wasi-sdk lacks for other targets.
+set(refused_header "${CMAKE_CURRENT_SOURCE_DIR}/c/crlf/test_crlf_npc.h")
+set(wrong_target "test_crlf_npc\\.h is for scripts built for wasm32-wasip1")
+set(threads "test_crlf_npc\\.h is for scripts built without threads")
+foreach(case IN ITEMS
+    "wasm64|--target=wasm64-wasip1|${wrong_target}"
+    "another_system|--target=wasm32-unknown-unknown|${wrong_target}"
+    "atomics|--target=wasm32-wasip1;-matomics|${threads}"
+    "reentrant|--target=wasm32-wasip1;-D_REENTRANT|${threads}"
+)
+    string(REPLACE "|" ";" case "${case}")
+    list(POP_FRONT case what)
+    list(POP_BACK case message)
+    set(command "${STASIS_WASI_CLANG}" ${case} "--sysroot=${STASIS_WASI_SYSROOT}" -fsyntax-only
+        -fno-caret-diagnostics -Wfatal-errors -x c "${refused_header}"
+    )
+    add_test(NAME generator.c_header_refuses.${what}
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMMAND=${command}"
+            -DEXIT_CODE=1
+            "-DLINES=.*test_crlf_npc\\.h:[0-9]+:[0-9]+: fatal error: \"${message}\""
+            -P "${expect_lines}"
+    )
+endforeach()
+
 set(escaping "${CMAKE_CURRENT_SOURCE_DIR}/host/escaping")
 stasis_add_compile_check(stasis_host_macro_check_c escaping_macros.c C 99 "${escaping}")
 stasis_add_compile_check(stasis_host_macro_check_cxx escaping_macros.cpp CXX 11 "${escaping}")
 
-# This build generates the host side and the WIT rendering of the sample dungeon interface with
-# stasis_generate, compiles the host side, and checks both against their golden files.
+# This build generates the host side, the C bindings and the WIT rendering of the sample dungeon
+# interface with stasis_generate, compiles the host side, and checks all three against their golden
+# files.
 stasis_generate(host valid/dungeon.stasis OUTPUT_DIRECTORY generated VARIABLE dungeon_host)
+stasis_generate(c valid/dungeon.stasis OUTPUT_DIRECTORY generated VARIABLE dungeon_c)
 stasis_generate(wit valid/dungeon.stasis OUTPUT_DIRECTORY generated VARIABLE dungeon_wit)
 list(GET dungeon_host 1 dungeon_source)
 stasis_add_compile_check(stasis_generated_host_side "${dungeon_source}" C 99
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
-add_custom_target(stasis_generated_wit ALL DEPENDS ${dungeon_wit})
-foreach(command IN ITEMS host wit)
+add_custom_target(stasis_generated_files ALL DEPENDS ${dungeon_c} ${dungeon_wit})
+foreach(command IN ITEMS host c wit)
     foreach(file IN LISTS dungeon_${command})
         cmake_path(GET file FILENAME name)
         add_test(NAME generator.stasis_generate.writes_${name}

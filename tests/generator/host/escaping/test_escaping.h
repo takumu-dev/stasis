@@ -70,6 +70,7 @@ typedef struct test_escaping_words_named {
     uint8_t far_;
     uint8_t linux_;
     uint8_t unix_;
+    uint8_t alloca_;
     uint8_t stdin_;
     uint8_t stdout_;
     uint8_t stderr_;

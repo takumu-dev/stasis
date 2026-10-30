@@ -21,6 +21,7 @@ group words {
         far: u8,
         linux: u8,
         unix: u8,
+        alloca: u8,
         stdin: u8,
         stdout: u8,
         stderr: u8,

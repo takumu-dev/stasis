@@ -2,11 +2,11 @@
 
 #include "arena.h"
 #include "c_names.h"
+#include "c_writer.h"
 #include "files.h"
 #include "interface.h"
 #include "text.h"
 
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -16,69 +16,6 @@
  * STASIS_INTERFACE_FORMAT. It's written as a number, so that the data names the format it was
  * generated in even when it's compiled against a later stasis_interface.h. */
 enum { DESCRIPTOR_FORMAT = 1 };
-
-/* What the strings and handles in each record are: whether it holds a string, and whether it holds
- * a handle, directly or in a record of its own. Each is indexed by the record's index. */
-struct record_contents {
-    bool *strings;
-    bool *handles;
-};
-
-/* The state of writing the host's side. */
-struct writer {
-    struct arena *arena;
-    const struct interface *interface;
-    /* The prefix of every C name, and of every macro's. */
-    const char *prefix;
-    const char *macro_prefix;
-    /* The file being written. */
-    struct text *out;
-    /* Every record, ordered so that each comes after the records it holds, and otherwise in the
-     * order the file declares them. */
-    const struct record **records;
-    /* Every record, by its index. */
-    const struct record **records_by_index;
-    struct record_contents contents;
-    /* Every group, ordered so that each comes after the groups it uses, and otherwise in the order
-     * the file declares them. */
-    const struct group **groups;
-};
-
-/* Adds a string formatted as snprintf does to a list. */
-static void add_string(struct writer *writer, struct strings *strings, const char *format, ...)
-    PRINTF_FORMAT(3, 4);
-
-static void add_string(struct writer *writer, struct strings *strings, const char *format, ...) {
-    va_list arguments;
-    va_start(arguments, format);
-    strings_add(strings, writer->arena, arena_vformat(writer->arena, format, arguments));
-    va_end(arguments);
-}
-
-/* Writes a list, such as a call's arguments: `head`, the items separated by commas, and `tail`.
- * They go on one line at `indent` if that fits. Otherwise the items go on the next line, 4 columns
- * further in, or failing that, on a line each. */
-static void write_list(struct writer *writer, const char *indent, const char *head,
-                       const struct strings *items, const char *tail) {
-    const size_t joined = joined_length(items);
-    if (strlen(indent) + strlen(head) + joined + strlen(tail) <= LINE_LIMIT) {
-        text_format(writer->out, "%s%s", indent, head);
-        text_append_joined(writer->out, items);
-        text_format(writer->out, "%s\n", tail);
-        return;
-    }
-    text_format(writer->out, "%s%s\n", indent, head);
-    if (strlen(indent) + 4 + joined + strlen(tail) <= LINE_LIMIT) {
-        text_format(writer->out, "%s    ", indent);
-        text_append_joined(writer->out, items);
-        text_format(writer->out, "%s\n", tail);
-        return;
-    }
-    for (size_t i = 0; i < items->count; i++) {
-        text_format(writer->out, "%s    %s%s\n", indent, items->items[i],
-                    i + 1 < items->count ? "," : tail);
-    }
-}
 
 /* Writes an initialiser: `head`, the items in braces, and `tail`. They go on one line at `indent`
  * if that fits, and otherwise each item goes on a line of its own. */
@@ -97,134 +34,15 @@ static void write_initialiser(struct writer *writer, const char *indent, const c
     text_format(writer->out, "%s}%s\n", indent, tail);
 }
 
-/* A line of a doc comment from the interface, as it goes after a comment's `*`: with no space at
- * its end, and a space at its start unless it's empty. A `*` and a `/` that would end the comment,
- * or that compilers warn would start another within it, are kept apart by a space. */
-static const char *doc_line(struct writer *writer, const char *line) {
-    size_t length = strlen(line);
-    while (length > 0 && (line[length - 1] == ' ' || line[length - 1] == '\t')) {
-        length--;
-    }
-    struct text rendered;
-    text_init(&rendered, writer->arena);
-    if (length > 0 && line[0] != ' ') {
-        text_append(&rendered, " ");
-    }
-    for (size_t i = 0; i < length; i++) {
-        text_append_length(&rendered, &line[i], 1);
-        if (i + 1 == length) {
-            break;
-        }
-        if ((line[i] == '*' && line[i + 1] == '/') || (line[i] == '/' && line[i + 1] == '*')) {
-            text_append(&rendered, " ");
-        }
-    }
-    return rendered.data;
-}
-
-/* Writes a doc comment at `indent`, of up to three parts, each of which may be left out: its first
- * lines, such as a Doxygen `@brief`, the interface's doc comment, and a paragraph of the
- * generator's own. A comment of one line goes on one line, if it fits. */
-static void write_doc(struct writer *writer, const char *indent, const char *first,
-                      const struct doc *doc, const char *paragraph) {
-    const size_t doc_count = doc == NULL ? 0 : doc->count;
-    bool has_paragraph = false;
-    if (paragraph != NULL) {
-        has_paragraph = paragraph[0] != '\0';
-    }
-    if (first == NULL && doc_count == 0 && !has_paragraph) {
-        return;
-    }
-    const char *only = NULL;
-    if (first != NULL && strchr(first, '\n') == NULL && doc_count == 0 && !has_paragraph) {
-        only = arena_format(writer->arena, " %s", first);
-    } else if (first == NULL && doc_count == 1 && !has_paragraph) {
-        only = doc_line(writer, doc->lines[0]);
-    }
-    if (only != NULL && strlen(indent) + strlen(only) + 6 <= LINE_LIMIT) {
-        text_format(writer->out, "%s/**%s */\n", indent, only);
-        return;
-    }
-
-    text_format(writer->out, "%s/**\n", indent);
-    bool separate = false;
-    while (first != NULL) {
-        const char *end = strchr(first, '\n');
-        const int length = end == NULL ? (int)strlen(first) : (int)(end - first);
-        text_format(writer->out, "%s * %.*s\n", indent, length, first);
-        first = end == NULL ? NULL : end + 1;
-        separate = true;
-    }
-    if (doc_count > 0) {
-        if (separate) {
-            text_format(writer->out, "%s *\n", indent);
-        }
-        for (size_t i = 0; i < doc_count; i++) {
-            text_format(writer->out, "%s *%s\n", indent, doc_line(writer, doc->lines[i]));
-        }
-        separate = true;
-    }
-    if (has_paragraph) {
-        if (separate) {
-            text_format(writer->out, "%s *\n", indent);
-        }
-        text_fill(writer->out, arena_format(writer->arena, "%s *", indent), paragraph);
-    }
-    text_format(writer->out, "%s */\n", indent);
-}
-
-/* The C type of each built-in type, and the descriptor's name for it. */
-static const struct {
-    const char *c;
-    const char *descriptor;
-} built_in_types[] = {
-    [TYPE_U8] = {"uint8_t", "STASIS_TYPE_U8"},
-    [TYPE_U16] = {"uint16_t", "STASIS_TYPE_U16"},
-    [TYPE_U32] = {"uint32_t", "STASIS_TYPE_U32"},
-    [TYPE_U64] = {"uint64_t", "STASIS_TYPE_U64"},
-    [TYPE_S8] = {"int8_t", "STASIS_TYPE_S8"},
-    [TYPE_S16] = {"int16_t", "STASIS_TYPE_S16"},
-    [TYPE_S32] = {"int32_t", "STASIS_TYPE_S32"},
-    [TYPE_S64] = {"int64_t", "STASIS_TYPE_S64"},
-    [TYPE_F32] = {"float", "STASIS_TYPE_F32"},
-    [TYPE_F64] = {"double", "STASIS_TYPE_F64"},
-    [TYPE_BOOL] = {"bool", "STASIS_TYPE_BOOL"},
-    [TYPE_STRING] = {"stasis_string", "STASIS_TYPE_STRING"},
+/* The descriptor's name for each built-in type. */
+static const char *const descriptor_types[] = {
+    [TYPE_U8] = "STASIS_TYPE_U8",     [TYPE_U16] = "STASIS_TYPE_U16",
+    [TYPE_U32] = "STASIS_TYPE_U32",   [TYPE_U64] = "STASIS_TYPE_U64",
+    [TYPE_S8] = "STASIS_TYPE_S8",     [TYPE_S16] = "STASIS_TYPE_S16",
+    [TYPE_S32] = "STASIS_TYPE_S32",   [TYPE_S64] = "STASIS_TYPE_S64",
+    [TYPE_F32] = "STASIS_TYPE_F32",   [TYPE_F64] = "STASIS_TYPE_F64",
+    [TYPE_BOOL] = "STASIS_TYPE_BOOL", [TYPE_STRING] = "STASIS_TYPE_STRING",
 };
-
-/* How `type` is spelt in C. A handle's type is a pointer, and its spelling ends in `*`. */
-static const char *c_type(struct writer *writer, const struct type *type) {
-    switch (type->kind) {
-    case TYPE_RECORD:
-        return arena_format(writer->arena, "%s%s", writer->prefix,
-                            c_record_name(type->record, writer->arena));
-    case TYPE_OBJECT:
-        return arena_format(writer->arena, "%s%s *", writer->prefix,
-                            c_object_name(type->object, writer->arena));
-    default:
-        return built_in_types[type->kind].c;
-    }
-}
-
-/* A pointer to the C type `type`. */
-static const char *pointer_to(struct writer *writer, const char *type) {
-    return arena_format(writer->arena, "%s%s*", type, type[strlen(type) - 1] == '*' ? "" : " ");
-}
-
-/* A declaration of `name` as the C type `type`. */
-static const char *declaration(struct writer *writer, const char *type, const char *name) {
-    return arena_format(writer->arena, "%s%s%s", type, type[strlen(type) - 1] == '*' ? "" : " ",
-                        name);
-}
-
-/* A handle to the objects of `object`, as a method's first parameter takes it. */
-static struct type handle_to(const struct object *object) {
-    struct type type;
-    memset(&type, 0, sizeof type);
-    type.kind = TYPE_OBJECT;
-    type.object = object;
-    return type;
-}
 
 /* The number of a function's parameters, a method's handle to its object counted as its first. */
 static size_t count_parameters(const struct function *function) {
@@ -275,169 +93,6 @@ static size_t count_entry_points(const struct script *script) {
     return count;
 }
 
-/* What a host function or a method is called in a sentence. */
-static const char *function_word(const struct function *function) {
-    return function->object != NULL ? "method" : "host function";
-}
-
-/* A host function, a method or an entry point, as the host's side names it. */
-struct function_names {
-    const struct function *function;
-    /* Its qualified name in the interface, such as `world.entity.name`. */
-    const char *qualified;
-    /* Its C name after the prefix, such as `world_entity_name`, which its statics in the source
-     * start with too. */
-    const char *base;
-};
-
-/* Whether a value of `type` holds a string. */
-static bool holds_string(const struct writer *writer, const struct type *type) {
-    if (type->kind == TYPE_RECORD) {
-        return writer->contents.strings[type->record->index];
-    }
-    return type->kind == TYPE_STRING;
-}
-
-/* Whether a value of `type` holds a handle. */
-static bool holds_handle(const struct writer *writer, const struct type *type) {
-    if (type->kind == TYPE_RECORD) {
-        return writer->contents.handles[type->record->index];
-    }
-    return type->kind == TYPE_OBJECT;
-}
-
-/* Whether a record's fields hold only records in `placed`, by index. */
-static bool fields_placed(const struct record *record, const bool *placed) {
-    for (const struct field *field = record->fields; field != NULL; field = field->next) {
-        if (field->type.kind == TYPE_RECORD && !placed[field->type.record->index]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/* Orders every record after the records it holds, picking each time the first in the file whose
- * records are all placed, and works out what each holds. */
-static void order_records(struct writer *writer) {
-    const struct interface *interface = writer->interface;
-    const size_t count = interface->record_count;
-    const struct record **all =
-        (const struct record **)arena_allocate(writer->arena, (count + 1) * sizeof *all);
-    writer->records_by_index = all;
-    for (const struct group *group = interface->groups; group != NULL; group = group->next) {
-        for (const struct item *item = group->items; item != NULL; item = item->next) {
-            if (item->kind == ITEM_RECORD) {
-                all[item->as.record->index] = item->as.record;
-            }
-        }
-    }
-    bool *placed = arena_allocate(writer->arena, (count + 1) * sizeof *placed);
-    writer->records =
-        (const struct record **)arena_allocate(writer->arena, (count + 1) * sizeof *all);
-    writer->contents.strings = arena_allocate(writer->arena, (count + 1) * sizeof *placed);
-    writer->contents.handles = arena_allocate(writer->arena, (count + 1) * sizeof *placed);
-    for (size_t placed_count = 0; placed_count < count; placed_count++) {
-        size_t next = 0;
-        while (next < count && (placed[next] || !fields_placed(all[next], placed))) {
-            next++;
-        }
-        if (next == count) {
-            /* Only a record that holds itself would leave none to place, which reading the
-             * interface rules out. */
-            break;
-        }
-        const struct record *record = all[next];
-        placed[next] = true;
-        writer->records[placed_count] = record;
-        for (const struct field *field = record->fields; field != NULL; field = field->next) {
-            if (holds_string(writer, &field->type)) {
-                writer->contents.strings[next] = true;
-            }
-            if (holds_handle(writer, &field->type)) {
-                writer->contents.handles[next] = true;
-            }
-        }
-    }
-}
-
-/* Whether every group that `group` uses is in `placed`, by index. */
-static bool uses_placed(const struct group *group, const bool *placed) {
-    for (const struct item *item = group->items; item != NULL; item = item->next) {
-        if (item->kind == ITEM_USE && !placed[item->as.use->group->index]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/* Orders every group after the groups it uses, picking each time the first in the file whose used
- * groups are all placed. */
-static void order_groups(struct writer *writer) {
-    const size_t count = writer->interface->group_count;
-    const struct group **all =
-        (const struct group **)arena_allocate(writer->arena, (count + 1) * sizeof *all);
-    for (const struct group *group = writer->interface->groups; group != NULL;
-         group = group->next) {
-        all[group->index] = group;
-    }
-    bool *placed = arena_allocate(writer->arena, (count + 1) * sizeof *placed);
-    writer->groups =
-        (const struct group **)arena_allocate(writer->arena, (count + 1) * sizeof *all);
-    for (size_t placed_count = 0; placed_count < count; placed_count++) {
-        size_t next = 0;
-        while (next < count && (placed[next] || !uses_placed(all[next], placed))) {
-            next++;
-        }
-        if (next == count) {
-            /* Only groups that use each other in a cycle would leave none to place, which reading
-             * the interface rules out. */
-            break;
-        }
-        placed[next] = true;
-        writer->groups[placed_count] = all[next];
-    }
-}
-
-/* The names of a group's host function. */
-static struct function_names function_names(struct writer *writer, const struct group *group,
-                                            const struct function *function) {
-    struct function_names names;
-    names.function = function;
-    names.qualified = arena_format(writer->arena, "%s.%s", group->name.text, function->name.text);
-    names.base = c_function_name(group, function, writer->arena);
-    return names;
-}
-
-/* The names of a method. */
-static struct function_names method_names(struct writer *writer, const struct function *method) {
-    struct function_names names;
-    names.function = method;
-    names.qualified = arena_format(writer->arena, "%s.%s.%s", method->object->group->name.text,
-                                   method->object->name.text, method->name.text);
-    names.base = c_method_name(method, writer->arena);
-    return names;
-}
-
-/* The names of an entry point. */
-static struct function_names entry_point_names(struct writer *writer, const struct script *script,
-                                               const struct function *entry_point) {
-    struct function_names names;
-    names.function = entry_point;
-    names.qualified =
-        arena_format(writer->arena, "%s.%s", script->name.text, entry_point->name.text);
-    names.base = c_entry_point_name(script, entry_point, writer->arena);
-    return names;
-}
-
-/* The interface's namespace, name and version, as in `acme:dungeon@1.2.0`. */
-static const char *interface_title(const struct writer *writer) {
-    const struct interface *interface = writer->interface;
-    return arena_format(writer->arena, "%s:%s@%lu.%lu.%lu", interface->space.text,
-                        interface->name.text, (unsigned long)interface->version.major,
-                        (unsigned long)interface->version.minor,
-                        (unsigned long)interface->version.patch);
-}
-
 /* The stack that a host function has free when a script calls it, as text such as `16 KiB`. */
 static const char *host_function_stack(struct writer *writer) {
     const unsigned long size = STASIS_HOST_FUNCTION_STACK;
@@ -445,12 +100,6 @@ static const char *host_function_stack(struct writer *writer) {
         return arena_format(writer->arena, "%lu KiB", size / 1024);
     }
     return arena_format(writer->arena, "%lu bytes", size);
-}
-
-/* Writes the line that starts every generated file. */
-static void write_banner(struct writer *writer, const char *input) {
-    text_format(writer->out, "/* Generated by stasis-gen %s from %s. Do not edit. */\n",
-                STASIS_VERSION, input);
 }
 
 /* Writes the header's declarations of a kind of host object: its opaque type and its id. */
@@ -473,25 +122,6 @@ static void write_object_declarations(struct writer *writer, const struct object
         NULL, NULL);
     text_format(writer->out, "#define %s%s_KIND %lu\n", writer->macro_prefix,
                 c_uppercase(name, writer->arena), (unsigned long)object->index);
-}
-
-/* Writes a record's struct. */
-static void write_record_declaration(struct writer *writer, const struct record *record) {
-    const char *name =
-        arena_format(writer->arena, "%s%s", writer->prefix, c_record_name(record, writer->arena));
-    text_append(writer->out, "\n");
-    write_doc(writer, "",
-              arena_format(writer->arena, "@brief The record `%s.%s`.", record->group->name.text,
-                           record->name.text),
-              &record->doc, NULL);
-    text_format(writer->out, "typedef struct %s {\n", name);
-    for (const struct field *field = record->fields; field != NULL; field = field->next) {
-        write_doc(writer, "    ", NULL, &field->doc, NULL);
-        text_format(writer->out, "    %s;\n",
-                    declaration(writer, c_type(writer, &field->type),
-                                c_member_name(field->name.text, writer->arena)));
-    }
-    text_format(writer->out, "} %s;\n", name);
 }
 
 /* What a host function's documentation says beyond the interface's doc comment. */
@@ -539,22 +169,6 @@ static const char *host_function_rules(struct writer *writer, const struct funct
     return rules.data;
 }
 
-/* Adds the C declaration of each of a function's parameters, after a method's handle to its object,
- * `self`. */
-static void add_parameter_declarations(struct writer *writer, struct strings *declarations,
-                                       const struct function *function) {
-    if (function->object != NULL) {
-        const struct type self = handle_to(function->object);
-        add_string(writer, declarations, "%s", declaration(writer, c_type(writer, &self), "self"));
-    }
-    for (const struct parameter *parameter = function->parameters; parameter != NULL;
-         parameter = parameter->next) {
-        add_string(writer, declarations, "%s",
-                   declaration(writer, c_type(writer, &parameter->type),
-                               c_member_name(parameter->name.text, writer->arena)));
-    }
-}
-
 /* Writes the prototype of a host function or a method, which the host defines. */
 static void write_function_declaration(struct writer *writer, const struct function_names *names) {
     const struct function *function = names->function;
@@ -573,16 +187,6 @@ static void write_function_declaration(struct writer *writer, const struct funct
                                  arena_format(writer->arena, "%s%s", writer->prefix, names->base)));
     write_list(writer, "", head, &parameters, ");");
 }
-
-/* Writes a member group's opening: the Doxygen comment that names it, and its `@{`. */
-static void write_section_start(struct writer *writer, const char *name, const struct doc *doc) {
-    text_append(writer->out, "\n");
-    write_doc(writer, "", name, doc, NULL);
-    text_append(writer->out, "/** @{ */\n");
-}
-
-/* Writes a member group's closing. */
-static void write_section_end(struct writer *writer) { text_append(writer->out, "\n/** @} */\n"); }
 
 /* Whether a group declares anything in C: a record, an object or a host function. */
 static bool declares_anything(const struct group *group) {
@@ -742,7 +346,7 @@ static void add_value(struct writer *writer, struct strings *items, const struct
         add_string(writer, items, ".index = %s%s_KIND", writer->macro_prefix,
                    c_uppercase(c_object_name(type->object, writer->arena), writer->arena));
     } else {
-        add_string(writer, items, ".type = %s", built_in_types[type->kind].descriptor);
+        add_string(writer, items, ".type = %s", descriptor_types[type->kind]);
     }
     if (offset != NULL) {
         add_string(writer, items, ".offset = %s", offset);
@@ -1170,13 +774,7 @@ static void write_source(struct writer *writer, const char *base, const char *in
 void generate_host(const struct interface *interface, const char *prefix, const char *input,
                    struct arena *arena, struct output_file files[HOST_FILE_COUNT]) {
     struct writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.arena = arena;
-    writer.interface = interface;
-    writer.prefix = prefix;
-    writer.macro_prefix = c_uppercase(prefix, arena);
-    order_records(&writer);
-    order_groups(&writer);
+    writer_init(&writer, interface, prefix, false, arena);
     const char *base = arena_copy(arena, prefix, strlen(prefix) - 1);
 
     struct text header;

@@ -1,11 +1,12 @@
 /* stasis-gen, Stasis's generator: it reads an interface file and checks it, prints what a host
- * developer needs from it, or writes the host's side of it or its WIT rendering.
+ * developer needs from it, or writes the host's side of it, its C bindings or its WIT rendering.
  *
  * It exits with 0 when it did what it was asked, 1 when the interface has errors, and 2 when it
  * couldn't run: for a bad command line, a file it can't read or write, or a lack of memory. It
  * writes nothing when the interface has errors. */
 
 #include "arena.h"
+#include "c_bindings.h"
 #include "c_names.h"
 #include "diagnostics.h"
 #include "files.h"
@@ -32,14 +33,15 @@ static const char usage[] =
     "usage: stasis-gen <command> [<option>...] <interface file>\n"
     "       stasis-gen --version\n"
     "commands:\n"
+    "  c           write the C bindings of each kind of script, as a C header and source\n"
     "  check       check the interface file, and write nothing\n"
     "  host        write the host's side of the interface, as a C header and source\n"
     "  signatures  print the signature encoding and hash of each host function, method and entry\n"
     "              point\n"
     "  wit         write the interface's WIT rendering\n"
-    "options of host:\n"
+    "options of c and host:\n"
     "  --prefix <prefix>         start every C name with <prefix>, not <namespace>_<name>_\n"
-    "options of host and wit:\n"
+    "options of c, host and wit:\n"
     "  --output-directory <dir>  write into <dir>, not the current directory\n";
 
 /* What a command is given besides its interface file. */
@@ -139,6 +141,15 @@ static int host(const struct interface *interface, const struct options *options
     return write_files(files, HOST_FILE_COUNT, options, arena);
 }
 
+/* Writes the C bindings of each kind of script. */
+static int c_bindings(const struct interface *interface, const struct options *options,
+                      struct arena *arena) {
+    const size_t count = c_bindings_file_count(interface);
+    struct output_file *files = arena_allocate(arena, (count + 1) * sizeof *files);
+    generate_c_bindings(interface, options->prefix, base_name(options->path), arena, files);
+    return write_files(files, count, options, arena);
+}
+
 /* Writes the interface's WIT rendering. */
 static int wit(const struct interface *interface, const struct options *options,
                struct arena *arena) {
@@ -154,9 +165,8 @@ static const struct {
     bool takes_prefix;
     bool takes_output_directory;
 } commands[] = {
-    {"check", check, false, false},
-    {"host", host, true, true},
-    {"signatures", signatures, false, false},
+    {"c", c_bindings, true, true}, {"check", check, false, false},
+    {"host", host, true, true},    {"signatures", signatures, false, false},
     {"wit", wit, false, true},
 };
 

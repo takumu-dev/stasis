@@ -76,22 +76,30 @@ function(stasis_add_wat_module name source)
 endfunction()
 
 # Builds the C script <name>.wasm from the C sources that follow the name, compiling each on its own
-# and linking them with the C library, with the flags above and nothing else.
+# and linking them with the C library, with the flags above and nothing else but the directories
+# that INCLUDE_DIRECTORIES names, which go on the include path. A source may be generated, such as
+# the C bindings that stasis_generate writes, in which case DEPENDS names the files it's generated
+# with, which each source is compiled after.
+#
+#   stasis_add_c_script(<name> <source>... [INCLUDE_DIRECTORIES <directory>...]
+#                       [DEPENDS <file>...])
 function(stasis_add_c_script name)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "INCLUDE_DIRECTORIES;DEPENDS")
     set(script "${STASIS_SCRIPTS_DIR}/${name}.wasm")
     set(objects_dir "${CMAKE_CURRENT_BINARY_DIR}/stasis_script_${name}.dir")
     file(MAKE_DIRECTORY "${objects_dir}")
     set(sysroot "--sysroot=${STASIS_WASI_SYSROOT}")
+    list(TRANSFORM arg_INCLUDE_DIRECTORIES PREPEND "-I")
 
     set(objects "")
-    foreach(source IN LISTS ARGN)
+    foreach(source IN LISTS arg_UNPARSED_ARGUMENTS)
         cmake_path(ABSOLUTE_PATH source NORMALIZE)
         cmake_path(GET source FILENAME object)
         set(object "${objects_dir}/${object}.o")
         add_custom_command(OUTPUT "${object}"
             COMMAND "${STASIS_WASI_CLANG}" ${STASIS_C_SCRIPT_FLAGS} "${sysroot}"
-                -MD -MF "${object}.d" -c "${source}" -o "${object}"
-            DEPENDS "${source}"
+                ${arg_INCLUDE_DIRECTORIES} -MD -MF "${object}.d" -c "${source}" -o "${object}"
+            DEPENDS "${source}" ${arg_DEPENDS}
             DEPFILE "${object}.d"
             COMMENT "Compiling ${source} for the C script ${name}.wasm"
             VERBATIM

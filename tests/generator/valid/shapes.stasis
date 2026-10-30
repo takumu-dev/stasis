@@ -1,0 +1,46 @@
+/// Values of each shape that the C bindings lower or lift in a way of their own, which the tests of
+/// the C bindings pass through a C script built against them: arguments that spill into memory,
+/// results in return areas, strings deep in records, and records of one value, which cross as that
+/// value.
+interface test:shapes@1.0.0;
+
+group host {
+    object item {}
+
+    record label { text: string }
+    /// Two strings, one of them in a record of its own.
+    record pair { left: label, right: string }
+    record single { value: f64 }
+    /// One value, two records deep.
+    record wrapped { inner: single }
+    /// One handle, in a record.
+    record tagged { item: item }
+
+    /// Records its arguments, which flatten into twenty core values, so that they spill into the
+    /// script's memory, and returns the number of bytes in their strings.
+    fn take(a: pair, b: pair, c: pair, d: pair, e: pair) -> wrapped;
+    /// Returns the pair the test has set.
+    fn give() -> pair;
+    /// Records its argument, and returns the test's item.
+    fn tag(value: wrapped) -> tagged;
+}
+
+/// A group that `user` doesn't use, whose host function its C bindings leave out, and whose record
+/// they declare all the same.
+group unused {
+    record ignored { value: u8 }
+
+    fn ignore(value: ignored);
+}
+
+script user {
+    uses host;
+
+    /// Passes its arguments to `host.take`, prints what it returns, and returns the pair that
+    /// `host.give` returns, but with the right string of its last argument.
+    fn spill(a: pair, b: pair, c: pair, d: pair, e: pair) -> pair;
+    /// Passes its argument to `host.tag`, and returns what it returns.
+    optional fn wrap(value: wrapped) -> tagged;
+    /// Returns its argument.
+    optional fn echo(value: pair) -> pair;
+}

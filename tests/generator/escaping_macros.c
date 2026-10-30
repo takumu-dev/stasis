@@ -1,7 +1,8 @@
 /* Compiles the host side of escaping.stasis, as C, where the lowercase macros it escapes are
  * defined as a host's headers may define them: errno and the standard streams by the C library,
- * bool, true and false by <stdbool.h>, linux and unix by GCC and Clang in their GNU modes, and
- * small, near and far by Windows' headers. */
+ * bool, true and false by <stdbool.h>, linux and unix by GCC and Clang in their GNU modes, small,
+ * near and far by Windows' headers, and alloca by wasi-libc's <stdlib.h>, as the C bindings meet
+ * it. */
 
 #include <errno.h>
 #include <stdbool.h>
@@ -12,5 +13,6 @@
 #define small char
 #define near
 #define far
+#define alloca __builtin_alloca
 
 #include "test_escaping.c"

@@ -32,7 +32,7 @@ group helpers {
 
 group types {
     record sizes { uint8_t: u8, stasis_string: u8 }
-    fn sized(uint32_t: u32, test_clashes_world_entity: u8);
+    fn sized(uint32_t: u32, test_clashes_world_entity: u8, test_clashes_string: u8);
 }
 
 script npc {
@@ -61,6 +61,8 @@ script npc {
 //! c_name_clashes.stasis:35:14: error: parameter `uint32_t` of host function `types.sized` comes out in C as `uint32_t`, a name the host's side uses already
 //! c_name_clashes.stasis:35:29: error: parameter `test_clashes_world_entity` of host function `types.sized` and kind of host object `world.entity` both come out in C as `test_clashes_world_entity`
 //! c_name_clashes.stasis:4:12: note: kind of host object `world.entity` is here
+//! c_name_clashes.stasis:35:60: error: parameter `test_clashes_string` of host function `types.sized` and the C bindings' string type both come out in C as `test_clashes_string`
+//! c_name_clashes.stasis:1:1: note: the C bindings' string type is here
 //! c_name_clashes.stasis:40:8: error: entry point `npc.tick_now` and host function `npc_tick.now` both come out in C as `test_clashes_npc_tick_now`
 //! c_name_clashes.stasis:21:8: note: host function `npc_tick.now` is here
 //! c_name_clashes.stasis:41:12: error: parameter `stasis_call` of entry point `npc.run` comes out in C as `stasis_call`, a name the host's side uses already

@@ -84,6 +84,10 @@ static const stasis_field words_named_fields_[] = {
         .value = {.type = STASIS_TYPE_U8, .offset = offsetof(test_escaping_words_named, unix_)},
     },
     {
+        .name = "alloca",
+        .value = {.type = STASIS_TYPE_U8, .offset = offsetof(test_escaping_words_named, alloca_)},
+    },
+    {
         .name = "stdin",
         .value = {.type = STASIS_TYPE_U8, .offset = offsetof(test_escaping_words_named, stdin_)},
     },
@@ -206,7 +210,7 @@ static const stasis_record records_[] = {
         .name = "named",
         .group = 0,
         .fields = words_named_fields_,
-        .field_count = 23,
+        .field_count = 24,
         .size = sizeof(test_escaping_words_named),
     },
 };
